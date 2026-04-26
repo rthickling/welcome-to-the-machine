@@ -3,7 +3,15 @@
 Machine language only.
 
 <p align="center">
-  <video src="assets/videos/elon-clip.mp4" controls width="720"></video>
+  <a href="assets/videos/musk-ai-to-machine.mp4">
+    <img src="assets/images/musk-ai-to-machine.png" alt="Musk and the machine" />
+  </a>
+</p>
+
+<p align="center">
+  <a href="assets/videos/musk-ai-to-machine.mp4">
+    ▶ Watch the video
+  </a>
 </p>
 
 ## Motivation
