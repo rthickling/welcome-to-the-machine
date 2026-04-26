@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Notes WebAssembly Runner</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: system-ui, sans-serif;
+      background: #151515;
+      color: #e0e0e0;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+    }
+
+    main {
+      display: grid;
+      gap: 0.75rem;
+    }
+
+    canvas {
+      width: 600px;
+      height: 400px;
+      border: 1px solid #555;
+      image-rendering: pixelated;
+      background: #202020;
+    }
+
+    .hint {
+      max-width: 600px;
+      line-height: 1.4;
+      color: #b8b8b8;
+      font-size: 0.95rem;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <canvas id="notes" width="600" height="400" tabindex="0" aria-label="Notes WebAssembly UI"></canvas>
+    <div class="hint">
+      Type printable text. Backspace edits. Enter saves. Click a saved first-word row to reload it into the editor.
+    </div>
+  </main>
+
+  <script>
+    const canvas = document.getElementById("notes");
+    const ctx = canvas.getContext("2d");
+    const decoder = new TextDecoder("utf-8");
+    const encoder = new TextEncoder();
+    const storageKey = "machine-welcome.notes-web.records";
+    let instance;
+    let memory;
+    let background = "#202020";
+    let foreground = "#e0e0e0";
+
+    function cssColor(pixel) {
+      return `#${(pixel >>> 0).toString(16).padStart(6, "0").slice(-6)}`;
+    }
+
+    function savedNotes() {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(storageKey) || "[]");
+        return Array.isArray(parsed) ? parsed.filter((item) => typeof item === "string") : [];
+      } catch {
+        return [];
+      }
+    }
+
+    function setSavedNotes(notes) {
+      localStorage.setItem(storageKey, JSON.stringify(notes));
+    }
+
+    function drawSavedNotes() {
+      const notes = savedNotes();
+      ctx.save();
+      ctx.fillStyle = foreground;
+      ctx.font = "16px monospace";
+      notes.slice(0, 20).forEach((note, index) => {
+        const firstWord = note.trim().split(/\s+/, 1)[0] || note;
+        ctx.fillText(firstWord, 360, 46 + index * 16);
+      });
+      ctx.restore();
+    }
+
+    function readMemory(ptr, len) {
+      return decoder.decode(new Uint8Array(memory.buffer, ptr, len));
+    }
+
+    function repaintListSoon() {
+      requestAnimationFrame(drawSavedNotes);
+    }
+
+    const imports = {
+      notes: {
+        clear() {
+          ctx.fillStyle = background;
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+        },
+        style(bg, fg) {
+          background = cssColor(bg);
+          foreground = cssColor(fg);
+          ctx.strokeStyle = foreground;
+          ctx.fillStyle = foreground;
+          ctx.font = "16px monospace";
+        },
+        rect(x, y, w, h) {
+          ctx.strokeStyle = foreground;
+          ctx.strokeRect(x, y, w, h);
+        },
+        text(x, y, ptr, len) {
+          const value = readMemory(ptr, len);
+          ctx.fillStyle = foreground;
+          ctx.font = "16px monospace";
+          ctx.fillText(value, x, y);
+          if (value === "Words") {
+            repaintListSoon();
+          }
+        },
+        save(ptr, len) {
+          const value = readMemory(ptr, len).trimEnd();
+          if (!value) return;
+          const notes = savedNotes();
+          notes.push(value);
+          notes.sort((a, b) => a.localeCompare(b));
+          setSavedNotes(notes);
+          repaintListSoon();
+        },
+      },
+    };
+
+    function sendTextToWasm(text) {
+      for (let i = 0; i < 63; i += 1) {
+        instance.exports.key(8);
+      }
+      for (const byte of encoder.encode(text).slice(0, 63)) {
+        instance.exports.key(byte);
+      }
+    }
+
+    canvas.addEventListener("keydown", (event) => {
+      if (!instance) return;
+      if (event.key === "Backspace") {
+        event.preventDefault();
+        instance.exports.key(8);
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        instance.exports.key(13);
+        return;
+      }
+      if (event.key.length === 1) {
+        event.preventDefault();
+        for (const byte of encoder.encode(event.key)) {
+          instance.exports.key(byte);
+        }
+      }
+    });
+
+    canvas.addEventListener("click", (event) => {
+      if (!instance) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = Math.floor((event.clientX - rect.left) * (canvas.width / rect.width));
+      const y = Math.floor((event.clientY - rect.top) * (canvas.height / rect.height));
+      instance.exports.click(x, y);
+      if (x >= 360 && y >= 46) {
+        const row = Math.floor((y - 46) / 16);
+        const note = savedNotes()[row];
+        if (note) {
+          sendTextToWasm(note);
+        }
+      }
+      canvas.focus();
+    });
+
+    async function start() {
+      const response = await fetch("/targets/wasm/notes-web.wasm");
+      const bytes = await response.arrayBuffer();
+      const result = await WebAssembly.instantiate(bytes, imports);
+      instance = result.instance;
+      memory = instance.exports.memory;
+      instance.exports.init();
+      canvas.focus();
+    }
+
+    start().catch((error) => {
+      ctx.fillStyle = "#202020";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#ff8080";
+      ctx.font = "16px monospace";
+      ctx.fillText(`Failed to load notes-web.wasm: ${error.message}`, 16, 32);
+      console.error(error);
+    });
+  </script>
+</body>
+</html>

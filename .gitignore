@@ -1,0 +1,5 @@
+core
+core.*
+var/local/
+.venv/
+__pycache__/
