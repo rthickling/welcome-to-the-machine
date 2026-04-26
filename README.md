@@ -9,14 +9,18 @@ Machine language only.
 </p>
 
 <p align="center">
-  <a href="assets/videos/musk-ai-to-machine.mp4">
+  <a href="https://youtu.be/-BG6p44FGLE">
     ▶ Watch the video
   </a>
 </p>
 
 ## Motivation
 
-In early 2026, Elon Musk [said](https://www.youtube.com/watch?v=HD_SiJDWPcQ&t=683s) that in future, developers would write code in natural language and AI would generate machine code directly, without the need for human-readable code.
+In early 2026, Elon Musk [said](https://www.youtube.com/watch?v=HD_SiJDWPcQ&t=683.3s) "I think things will move, even by the end of this year, to where you don't even bother doing coding - the AI just creates the binary directly".
+
+For me and those with a history similar to mine, this resonated deeply since it was so plausible: if LLMs can write code at all, why not machine code?  Why bother with the invening human-readable languages?
+
+But: could they?  And does it work like that?
 
 This repo explores that idea by committing executable machine-code artifacts, their byte-level explanations, and machine-code test binaries.
 
