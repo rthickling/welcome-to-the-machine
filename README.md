@@ -2,14 +2,15 @@
 
 Machine language only.
 
+<p align="center">
+  <video src="assets/videos/elon-clip.mp4" controls width="720"></video>
+</p>
+
 ## Motivation
 
-In early 2026, Elon Musk [said](https://www.youtube.com/watch?v=HD_SiJDWPcQ&t=683s)
-that in future, developers would write code in natural language and AI would
-generate machine code directly, without the need for human-readable code.
+In early 2026, Elon Musk [said](https://www.youtube.com/watch?v=HD_SiJDWPcQ&t=683s) that in future, developers would write code in natural language and AI would generate machine code directly, without the need for human-readable code.
 
-This repo explores that idea by committing executable machine-code artifacts,
-their byte-level explanations, and machine-code test binaries.
+This repo explores that idea by committing executable machine-code artifacts, their byte-level explanations, and machine-code test binaries.
 
 ## Repository Map
 
@@ -23,12 +24,9 @@ their byte-level explanations, and machine-code test binaries.
 
 ## Rules
 
-The binding contribution rules are in [`docs/rules.md`](docs/rules.md). In
-short: committed implementations are executable binaries only; every binary has
-a sibling Markdown explanation; every target has a binary verifier.
+The binding contribution rules are in [`docs/rules.md`](docs/rules.md). In short: committed implementations are executable binaries only; every binary has a sibling Markdown explanation; every target has a binary verifier.
 
-Host setup and runtime notes are in
-[`docs/prerequisites.md`](docs/prerequisites.md).
+Host setup and runtime notes are in [`docs/prerequisites.md`](docs/prerequisites.md).
 
 ## Products
 
