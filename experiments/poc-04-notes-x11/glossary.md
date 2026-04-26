@@ -17,7 +17,7 @@ the long-form walkthroughs.
 | Title string offset `0x784` (structural test) | [`test-note-edit.md` — Why offset `0x784`?](test-note-edit.md#why-offset-0x784) |
 | `test-note-view` (offset `0x384`) | [`test-note-view.md`](test-note-view.md) |
 | `test-note-edit` (disassembly) | [`test-note-edit.md` — Code walkthrough](test-note-edit.md#code-walkthrough) |
-| Product Linux structural tests | [`../../products/notes/test-notes-linux-x86_64.md`](../../products/notes/test-notes-linux-x86_64.md) |
+| Product Linux structural tests | [`products/notes/test-notes-linux-x86_64.md`](../../products/notes/test-notes-linux-x86_64.md) |
 
 When a plan or product doc says “same as `poc-04`”, the **byte layout** and
 **syscall set** are authoritative in `note-edit.md` and `note-view.md`.

@@ -2,7 +2,7 @@
 
 `notes-linux-arm64` is a **166-byte** Linux ELF64 AArch64 executable. It is the
 first ARM64 Notes GUI scaffold artifact: a minimal native scaffold executable derived
-from [`../../../../../experiments/poc-06-linux-arm64/hello`](../../../../../experiments/poc-06-linux-arm64/hello.md), with the payload changed to:
+from [`experiments/poc-06-linux-arm64/hello.md`](../../../../../experiments/poc-06-linux-arm64/hello.md), with the payload changed to:
 
 ```text
 Notes GUI ARM

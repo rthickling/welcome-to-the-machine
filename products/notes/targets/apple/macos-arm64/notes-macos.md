@@ -2,7 +2,7 @@
 
 `notes-macos` is a **170-byte** Mach-O 64-bit arm64 executable container for the
 macOS Notes product target. It is derived from
-[`../../../../../experiments/poc-11-apple-mach-o/hello-macos`](../../../../../experiments/poc-11-apple-mach-o/hello-macos.md), with the inline payload
+[`experiments/poc-11-apple-mach-o/hello-macos.md`](../../../../../experiments/poc-11-apple-mach-o/hello-macos.md), with the inline payload
 changed to:
 
 ```text

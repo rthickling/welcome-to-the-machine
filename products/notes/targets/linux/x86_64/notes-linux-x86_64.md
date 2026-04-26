@@ -3,7 +3,7 @@
 `notes-linux-x86_64` is a **2632-byte** statically-linked Linux ELF64 x86_64
 binary. It is the first product-oriented note tool in the repo and is derived
 directly from the earlier raw-X11 editor documented in
-[`../../../../../experiments/poc-04-notes-x11/note-edit.md`](../../../../../experiments/poc-04-notes-x11/note-edit.md).
+[`experiments/poc-04-notes-x11/note-edit.md`](../../../../../experiments/poc-04-notes-x11/note-edit.md).
 
 The file keeps most of the same machine code, but appends a small border /
 Shift-key helper region and patches the title, labels, draw path, and event dispatch so the UI
@@ -42,7 +42,7 @@ Large parts of the binary are intentionally unchanged from `poc-04/note-edit`:
 - helper routines `fill_it8_spaces`, `send_it8`, and `exit_app`
 
 For those unchanged regions, the canonical byte-level explanation is still
-[`../../../../../experiments/poc-04-notes-x11/note-edit.md`](../../../../../experiments/poc-04-notes-x11/note-edit.md).
+[`experiments/poc-04-notes-x11/note-edit.md`](../../../../../experiments/poc-04-notes-x11/note-edit.md).
 
 One intentional X11 template change was also made in-place: the window's event
 mask now requests `ButtonPress` in addition to the earlier `KeyPress` and

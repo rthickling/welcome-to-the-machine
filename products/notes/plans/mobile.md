@@ -23,7 +23,7 @@ allowing a mobile-appropriate presentation:
 
 Starting point:
 
-- packaging/runtime proof: [`../../../experiments/poc-10-android-apk/hello.apk.md`](../../../experiments/poc-10-android-apk/hello.apk.md)
+- packaging/runtime proof: [`experiments/poc-10-android-apk/hello.apk.md`](../../../experiments/poc-10-android-apk/hello.apk.md)
 
 Required implementation work:
 
@@ -40,7 +40,7 @@ Required implementation work:
 
 Starting point:
 
-- structural Mach-O precedent: [`../../../experiments/poc-11-apple-mach-o/hello-ios.md`](../../../experiments/poc-11-apple-mach-o/hello-ios.md)
+- structural Mach-O precedent: [`experiments/poc-11-apple-mach-o/hello-ios.md`](../../../experiments/poc-11-apple-mach-o/hello-ios.md)
 
 Required implementation work:
 

@@ -9,7 +9,7 @@ This file defines the next native Linux target after the x86_64 reference build:
 ## Goal
 
 Port the current Linux product behavior from
-[`../targets/linux/x86_64/notes-linux-x86_64.md`](../targets/linux/x86_64/notes-linux-x86_64.md)
+[`products/notes/targets/linux/x86_64/notes-linux-x86_64.md`](../targets/linux/x86_64/notes-linux-x86_64.md)
 to ARM64 while preserving:
 
 - same `notes.db` record format
@@ -22,9 +22,9 @@ to ARM64 while preserving:
 
 ## Reuse from existing repo work
 
-- ARM64 ELF baseline: [`../../../experiments/poc-06-linux-arm64/hello.md`](../../../experiments/poc-06-linux-arm64/hello.md)
-- Android-style ARM64 ELF / tooling precedent: [`../../../experiments/poc-09-android-elf/hello.md`](../../../experiments/poc-09-android-elf/hello.md)
-- Linux X11 GUI reference: [`../targets/linux/x86_64/notes-linux-x86_64.md`](../targets/linux/x86_64/notes-linux-x86_64.md), [`../../../experiments/poc-04-notes-x11/note-edit.md`](../../../experiments/poc-04-notes-x11/note-edit.md)
+- ARM64 ELF baseline: [`experiments/poc-06-linux-arm64/hello.md`](../../../experiments/poc-06-linux-arm64/hello.md)
+- Android-style ARM64 ELF / tooling precedent: [`experiments/poc-09-android-elf/hello.md`](../../../experiments/poc-09-android-elf/hello.md)
+- Linux X11 GUI reference: [`products/notes/targets/linux/x86_64/notes-linux-x86_64.md`](../targets/linux/x86_64/notes-linux-x86_64.md), [`experiments/poc-04-notes-x11/note-edit.md`](../../../experiments/poc-04-notes-x11/note-edit.md)
 
 ## Implementation notes
 

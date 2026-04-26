@@ -23,7 +23,7 @@ reference build:
 
 The current Apple artifact in the repo is only a structural Mach-O precedent:
 
-- [`../../../experiments/poc-11-apple-mach-o/hello-macos.md`](../../../experiments/poc-11-apple-mach-o/hello-macos.md)
+- [`experiments/poc-11-apple-mach-o/hello-macos.md`](../../../experiments/poc-11-apple-mach-o/hello-macos.md)
 
 That file is useful for container shape only. It does not yet prove a runnable
 AppKit product path.

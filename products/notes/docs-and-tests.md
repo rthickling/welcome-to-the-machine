@@ -14,7 +14,7 @@ For every committed binary artifact, ship:
 - one matching test binary
 - one matching `test-*.md`
 
-This follows the repo-wide rules in [`../../docs/rules.md`](../../docs/rules.md).
+This follows the repo-wide rules in [`docs/rules.md`](../../docs/rules.md).
 
 ## Product families
 

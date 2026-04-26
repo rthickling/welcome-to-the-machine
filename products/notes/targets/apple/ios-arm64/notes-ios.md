@@ -2,7 +2,7 @@
 
 `notes-ios` is a **168-byte** Mach-O 64-bit arm64 executable container for the
 iOS Notes product target. It is derived from
-[`../../../../../experiments/poc-11-apple-mach-o/hello-ios`](../../../../../experiments/poc-11-apple-mach-o/hello-ios.md), with the inline payload changed
+[`experiments/poc-11-apple-mach-o/hello-ios.md`](../../../../../experiments/poc-11-apple-mach-o/hello-ios.md), with the inline payload changed
 to:
 
 ```text

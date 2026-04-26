@@ -12,7 +12,7 @@ reference names those pieces* in code and disassembly.
 ## Shared storage format
 
 The product reuses the existing on-disk note framing already documented in
-[`../../experiments/poc-03-notes-cli/note.md`](../../experiments/poc-03-notes-cli/note.md):
+[`experiments/poc-03-notes-cli/note.md`](../../experiments/poc-03-notes-cli/note.md):
 
 ```text
 [4-byte little-endian length][length bytes of note text]

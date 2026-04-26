@@ -20,7 +20,7 @@ through native Win32 GUI behavior rather than raw X11:
 ## Starting point
 
 The repo's current Windows precedent is a console PE in
-[`../../../experiments/poc-08-windows-pe/hello.exe.md`](../../../experiments/poc-08-windows-pe/hello.exe.md). That is useful as a PE
+[`experiments/poc-08-windows-pe/hello.exe.md`](../../../experiments/poc-08-windows-pe/hello.exe.md). That is useful as a PE
 container/import-table reference only. The product itself needs a real windowed
 subsystem path.
 
@@ -41,7 +41,7 @@ For `notes-win64.exe` first, then `notes-winarm64.exe`:
 
 The Windows versions should keep:
 
-- same record format from [`../contract.md`](../contract.md)
+- same record format from [`products/notes/contract.md`](../contract.md)
 - same first-word derivation rule
 - same append-on-Enter behavior used by the Linux reference build
 - same printable ASCII editing policy as the Linux reference build

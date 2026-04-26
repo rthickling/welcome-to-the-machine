@@ -6,7 +6,7 @@ the Android emulator.
 
 The APK keeps the manifest/resource package shape from the validated
 NativeActivity precedent in
-[`../../../../experiments/poc-10-android-apk/hello.apk`](../../../../experiments/poc-10-android-apk/hello.apk.md),
+[`experiments/poc-10-android-apk/hello.apk.md`](../../../../experiments/poc-10-android-apk/hello.apk.md),
 but replaces the old one-instruction native libraries with real machine-code
 payloads for both emulator/device ABIs.
 
