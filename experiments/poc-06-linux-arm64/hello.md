@@ -116,58 +116,64 @@ a8 0b 80 d2   mov   x8, #93
 01 00 00 d4   svc   #0                    ; exit(0)
 ```
 
-### Instruction-by-instruction
+### Instruction-by-instruction, with encodings
+
+AArch64 instructions are fixed 32-bit words stored **little-endian**, so the
+file bytes `01 01 00 10` are the word `0x10000101`. Three encodings cover the
+whole program:
+
+- **`ADR Xd, label`** — `0 immlo(2) 10000 immhi(19) Rd(5)`; the PC-relative
+  offset is `(immhi << 2) | immlo`.
+- **`MOVZ Xd, #imm16`** — `1 10 100101 hw(2) imm16(16) Rd(5)`; with `hw = 00`
+  the register is simply set to `imm16` (the top word `0xd28.....` is this
+  pattern, which disassemblers print as `mov`).
+- **`SVC #imm16`** — `11010100 000 imm16(16) 000 01`; word `0xd4000001` is
+  `svc #0`, the Linux syscall trap.
 
 #### 1. `01 01 00 10` — `adr x1, msg`
 
-Loads the address of the inline string into `x1`.
-
-`msg` is 32 bytes after the entry point, so the resolved address is:
+Word `0x10000101`: bit 31 = `0` (ADR, not ADRP), `immlo` (bits 30–29) = `0`,
+`immhi` (bits 23–5) = `8`, `Rd` (bits 4–0) = `1` (`x1`).
+Offset = `(8 << 2) | 0` = **32**, so:
 
 ```text
-0x400078 + 0x20 = 0x400098
+x1 = PC + 32 = 0x400078 + 0x20 = 0x400098   ; address of "Hello, arm64!\n"
 ```
 
 #### 2. `20 00 80 d2` — `mov x0, #1`
 
-Sets:
-
-- `x0 = 1` (stdout fd)
+Word `0xd2800020`: MOVZ with `hw` (bits 22–21) = `0`, `imm16` (bits 20–5) =
+`1`, `Rd` = `0`. Sets `x0 = 1` — the stdout file descriptor (syscall arg 1).
 
 #### 3. `c2 01 80 d2` — `mov x2, #14`
 
-Sets:
-
-- `x2 = 14` (string length)
+Word `0xd28001c2`: `imm16 = 14`, `Rd = 2`. Sets `x2 = 14` — the byte length
+of `"Hello, arm64!\n"` (syscall arg 3).
 
 #### 4. `08 08 80 d2` — `mov x8, #64`
 
-Linux AArch64 syscall number:
-
-- `64 = write`
+Word `0xd2800808`: `imm16 = 64`, `Rd = 8`. On Linux AArch64 the syscall
+number goes in `x8`; `64 = write`. (Note the numbers differ from x86_64,
+where `write` is 1.)
 
 #### 5. `01 00 00 d4` — `svc #0`
 
-Performs:
+Traps into the kernel. With `x8 = 64`, `x0 = 1`, `x1 = 0x400098`, `x2 = 14`
+this performs:
 
 ```text
 write(1, 0x400098, 14)
 ```
 
-On Linux AArch64:
-
-- syscall number is in `x8`
-- arguments are in `x0`, `x1`, `x2`, ...
+The return value comes back in `x0` and is ignored.
 
 #### 6. `00 00 80 d2` — `mov x0, #0`
 
-Prepares exit status `0`.
+Word `0xd2800000`: `imm16 = 0`, `Rd = 0`. Prepares exit status `0`.
 
 #### 7. `a8 0b 80 d2` — `mov x8, #93`
 
-Linux AArch64 syscall number:
-
-- `93 = exit`
+Word `0xd2800ba8`: `imm16 = 93`, `Rd = 8`. Linux AArch64 syscall `93 = exit`.
 
 #### 8. `01 00 00 d4` — `svc #0`
 
@@ -176,6 +182,9 @@ Performs:
 ```text
 exit(0)
 ```
+
+The process terminates here; no instruction after this word is ever fetched
+(and none exists — the string data follows immediately).
 
 ## Inline data
 

@@ -154,11 +154,39 @@ That is one AArch64 instruction:
 ret
 ```
 
-Byte view of the instruction word:
+### Encoding, bit by bit
 
-- `c0 03 5f d6` = encoded `ret` (AArch64 `RET` without explicit operand: return to the address in the link register `x30`).
+AArch64 instructions are 32-bit words stored **little-endian**, so the file
+bytes `c0 03 5f d6` are the word `0xd65f03c0`. `RET` is an unconditional
+branch-to-register with encoding:
 
-If a macOS loader were to start at `entryoff = 0x98`, the CPU would execute that single **`ret`** and then return to whatever address the loader placed in `lr`—in a real process that is defined by the dynamic loader; this artifact does not model a full user `main`. The proof is the **Mach-O** layout and metadata, not application behavior.
+```text
+1101011 0 0 10 11111 0000 0 0 Rn(5) 00000
+```
+
+Decoding `0xd65f03c0` = `1101 0110 0101 1111 0000 0011 1100 0000`:
+
+- bits 31–25 `1101011` — unconditional branch (register) class
+- bits 24–21 `0010` — `op = RET` (vs `0000` = `BR`, `0001` = `BLR`)
+- bits 20–16 `11111` and bits 15–10 `000000` — fixed
+- bits 9–5 `11110` = **30** — `Rn = x30`, the link register; `ret` with no
+  operand is `ret x30`
+- bits 4–0 `00000` — fixed
+
+So the single instruction branches to whatever address is in `x30` (`lr`).
+If a macOS loader were to start at `entryoff = 0x98`, the CPU would execute
+that single **`ret`** and then return to whatever address the loader placed in
+`lr` — in a real process that is defined by the dynamic loader; this artifact
+does not model a full user `main`. The proof is the **Mach-O** layout and
+metadata, not application behavior.
+
+A future runtime-capable version would replace this stub with a
+`write`/`exit` sequence like the Linux AArch64 greeter's — same `MOVZ` /
+`ADR` / `SVC` encodings documented instruction-by-instruction in
+[`experiments/poc-06-linux-arm64/hello.md`](../poc-06-linux-arm64/hello.md#instruction-by-instruction-with-encodings)
+— but using the XNU syscall convention (`x16` carries the syscall number,
+`write = 4`, `exit = 1`, and `svc #0x80` by convention) instead of Linux's
+`x8` / `64` / `93` / `svc #0`.
 
 ## Greeting payload
 

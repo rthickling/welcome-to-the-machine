@@ -135,13 +135,9 @@ The single instruction at file offset `0x2a9` is:
 c3
 ```
 
-which is:
-
-```text
-ret
-```
-
-So `ANativeActivity_onCreate` immediately returns.
+which is the x86_64 `RET` opcode (`0xC3`, near return): it pops the 8-byte
+return address off the stack into `rip`. So `ANativeActivity_onCreate`
+immediately returns to its caller (Android's `NativeActivity` glue).
 
 ### `lib/arm64-v8a/libhello.so`
 
@@ -161,11 +157,9 @@ The first instruction at file offset `0x2ad` is:
 c0 03 5f d6
 ```
 
-which is:
-
-```text
-ret
-```
+which is the AArch64 `ret` (word `0xd65f03c0`, branch to the link register
+`x30`), decoded bit-by-bit in
+[`experiments/poc-11-apple-mach-o/hello-macos.md`](../poc-11-apple-mach-o/hello-macos.md#encoding-bit-by-bit).
 
 So the ARM64 payload implements the same minimal entrypoint behavior as the
 x86_64 payload.

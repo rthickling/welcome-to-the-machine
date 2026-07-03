@@ -37,10 +37,12 @@ Build-version platform at `0x070`:
 01 00 00 00
 ```
 
-Entry stub at `0x098`:
+Entry stub at `0x098`, one AArch64 instruction (word `0xd65f03c0`, decoded
+bit-by-bit in
+[`experiments/poc-11-apple-mach-o/hello-macos.md`](../../../../../experiments/poc-11-apple-mach-o/hello-macos.md#encoding-bit-by-bit)):
 
 ```text
-c0 03 5f d6   ret
+c0 03 5f d6   ret       ; branch to x30 (lr)
 ```
 
 Payload at `0x09c`:

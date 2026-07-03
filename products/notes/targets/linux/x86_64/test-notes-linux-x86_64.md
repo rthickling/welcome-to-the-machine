@@ -45,26 +45,40 @@ expected file layout.
 
 Total file size: `452` bytes.
 
+## The shared descriptor-driven verifier (canonical reference)
+
+Every product structural verifier in this repo (`test-notes-macos`,
+`test-notes-ios`, `test-notes-linux-arm64`, `test-notes-web`,
+`test-notes-winarm64`, `test-notes-win64`, `test-notes-android`) is the **same
+Linux x86_64 machine-code routine** documented below. They differ only in three
+things, all in data:
+
+1. the embedded path string (which sibling file to open),
+2. the descriptor-table base address loaded into `r12d`,
+3. the descriptor count loaded into `r13d`.
+
+Those sibling docs therefore link here for the opcode walkthrough and only
+tabulate their own path, count, and the byte content of each 12-byte
+descriptor. The three-word descriptor format is:
+
+```text
+u32 file_offset                    ; where in the target file to read
+u32 byte_count                     ; how many bytes to read and compare
+u32 expected_bytes_virtual_address ; pointer to the embedded expected bytes
+```
+
 ## Overall logic
 
 Pseudocode:
 
 ```text
-fd = open("notes-linux-x86_64", O_RDONLY)
+fd = open(path, O_RDONLY)
 
 for each descriptor:
     pread64(fd, buf, descriptor.length, descriptor.offset)
     memcmp(buf, descriptor.expected, descriptor.length)
 
 exit(0) on success, else exit(1)
-```
-
-Each descriptor is:
-
-```text
-u32 file_offset
-u32 byte_count
-u32 expected_bytes_virtual_address
 ```
 
 ## Code walk-through

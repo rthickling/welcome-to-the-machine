@@ -26,11 +26,15 @@ work remain described in [`mobile-plan.md`](mobile-plan.md).
 ## Key bytes
 
 ```text
-0x000: cf fa ed fe
-0x070: 02 00 00 00
-0x098: c0 03 5f d6
-0x09c: 4e 6f 74 65 73 47 55 49 69 4f 53 0a
+0x000: cf fa ed fe                        ; MH_MAGIC_64
+0x070: 02 00 00 00                        ; LC_BUILD_VERSION platform = iOS
+0x098: c0 03 5f d6                        ; ret (word 0xd65f03c0, branch to x30)
+0x09c: 4e 6f 74 65 73 47 55 49 69 4f 53 0a ; "NotesGUIiOS\n"
 ```
+
+The entry stub is the same single `ret` as the macOS sibling; its word encoding
+is decoded bit-by-bit in
+[`experiments/poc-11-apple-mach-o/hello-macos.md`](../../../../../experiments/poc-11-apple-mach-o/hello-macos.md#encoding-bit-by-bit).
 
 ## Verification
 

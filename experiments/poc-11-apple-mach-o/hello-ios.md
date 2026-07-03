@@ -155,12 +155,17 @@ That one 32-bit AArch64 instruction is:
 ret
 ```
 
-Byte detail:
-
-- `c0 03 5f d6` = encoded `ret` (same **AArch64** `RET` as in `hello-macos`; see that file for the one-line execution story).
+The word `0xd65f03c0` (bytes stored little-endian) is decoded bit-by-bit in
+the macOS sibling's doc —
+[`experiments/poc-11-apple-mach-o/hello-macos.md`](hello-macos.md#encoding-bit-by-bit)
+— including the branch-register class bits, the `op = RET` field, and
+`Rn = x30` (the link register). The byte sequence here is identical; only the
+platform metadata and greeting string differ between the two files.
 
 The code is intentionally minimal because runtime behavior is not the proof
-being claimed yet; container correctness is.
+being claimed yet; container correctness is. (On real iOS the syscall story
+would differ from Linux the same way as described in the macOS doc: XNU takes
+the syscall number in `x16` with `svc #0x80`.)
 
 ## Greeting payload
 

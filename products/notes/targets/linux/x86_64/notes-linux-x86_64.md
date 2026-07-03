@@ -41,13 +41,21 @@ Large parts of the binary are intentionally unchanged from `poc-04/note-edit`:
 - input buffer limits and the save/backspace paths
 - helper routines `fill_it8_spaces`, `send_it8`, and `exit_app`
 
-For those unchanged regions, the canonical byte-level explanation is still
+`poc-04/note-edit` is the origin of those regions, and each one is documented
+opcode by opcode in
 [`experiments/poc-04-notes-x11/note-edit.md`](../../../../../experiments/poc-04-notes-x11/note-edit.md).
+The [Reused `poc-04` code](#reused-poc-04-code) section below maps every reused
+range to its exact walkthrough there and calls out the few product-specific
+differences.
 
 One intentional X11 template change was also made in-place: the window's event
 mask now requests `ButtonPress` in addition to the earlier `KeyPress` and
 `Expose` delivery, so the product's click-to-load and click-to-delete paths can
-actually receive mouse events from the X server.
+actually receive mouse events from the X server. The mask lives inside the
+`CreateWindow` value list at file offset `0x768` and now reads `05 80 00 00`
+(little-endian `0x00008005` =
+`KeyPressMask(0x1) | ButtonPressMask(0x4) | ExposureMask(0x8000)`); the earlier
+`poc-04` value was `0x00008001`, with the `ButtonPress` bit clear.
 
 ## On-disk note format
 
@@ -873,12 +881,48 @@ fixed-width 64-byte payload. That is larger than the minimal append path used by
 400909: e9 3b fc ff ff                jmp     0x400549                ; no disk update — refresh UI
 ```
 
+## Reused `poc-04` code
+
+Roughly the first 1200 bytes of executable code — entry, the X11 setup
+handshake, the editor edit/save paths, the loader and insertion sort, the draw
+helpers, the event loop, and exit — are inherited **unchanged** from
+`poc-04/note-edit`. Rather than duplicate the disassembly, each region links to
+its byte-by-byte walkthrough in
+[`experiments/poc-04-notes-x11/note-edit.md`](../../../../../experiments/poc-04-notes-x11/note-edit.md),
+which documents every one of those opcodes in full. The file offset of any
+instruction is `vaddr − 0x400000`, and the register roles are identical here:
+`rbx` = X socket fd, `r12d` = resource-id base, `r14w` = draw Y, `r15` =
+`notes.db` fd.
+
+| Region (vaddr) | Behaviour | Byte-by-byte reference | Product delta |
+| --- | --- | --- | --- |
+| `0x000..0x077` | ELF64 header + one `PT_LOAD` | [ELF header and load segment](../../../../../experiments/poc-04-notes-x11/note-edit.md#elf-header-and-load-segment-0x0000x077) | `p_filesz`/`p_memsz` are `0x0a48`/`0x10a48` here (vs `0x092a`/`0x1092a`) because the product appends new code and data |
+| `0x078..0x1d8` | socket/connect, setup handshake, resource-id patching, window bring-up | [Section A](../../../../../experiments/poc-04-notes-x11/note-edit.md#section-a--connect-to-x-and-fetch-setup-reply-0x0780x1d8) | `WM_NAME` string is `"notes-x64"`; the `CreateWindow` event mask is `0x8005` (adds `ButtonPress`); border/background/foreground colours differ — see [Fixed string patches](#fixed-string-patches) |
+| `0x1de..0x20c` | keycode → ASCII translate + dispatch | [Section B](../../../../../experiments/poc-04-notes-x11/note-edit.md#section-b--key-handler-0x1de0x233) | replaced in place by a `jmp` into the [Shift-aware key handler](#shift-aware-key-handler-0x400963) |
+| `0x20d..0x233` | printable-key append (63-char cap) | [Section B](../../../../../experiments/poc-04-notes-x11/note-edit.md#section-b--key-handler-0x1de0x233) | unchanged; now re-entered from the Shift handler |
+| `0x234..0x250` | backspace | [Section C](../../../../../experiments/poc-04-notes-x11/note-edit.md#section-c--backspace-0x2340x250) | unchanged |
+| `0x251..0x2f8` | save-on-Enter, append `[len+1][text][\n]` | [Section D](../../../../../experiments/poc-04-notes-x11/note-edit.md#section-d--save-current-input-0x2510x2f8) | unchanged |
+| `0x2f9..0x416` | `redraw`: reset count, load, insertion sort | [Section E](../../../../../experiments/poc-04-notes-x11/note-edit.md#section-e--load-and-sort-notes--the-redraw-entry-0x2f90x416) | entry reused as-is; the draw fall-through at `0x417` is repointed to the [two-pane draw routine](#two-pane-draw-routine) |
+| `0x4b4..0x4d6` | `recvfrom` main wait point | [Section G](../../../../../experiments/poc-04-notes-x11/note-edit.md#section-g--event-loop-0x4b40x4f4) | dispatch tail repointed (`0x4d7` → new [event dispatcher](#event-dispatcher)); the old compare chain at `0x4dc..0x4f4` is now dead code |
+| `0x4f5..0x525` | `fill_it8_spaces` / `send_it8` | [Section H](../../../../../experiments/poc-04-notes-x11/note-edit.md#section-h--helper-routines-0x4f50x525) | unchanged; the product patches the `x` field per pane before each call |
+| `0x526..0x537` | `exit_app` (`close` + `exit`) | [Section I](../../../../../experiments/poc-04-notes-x11/note-edit.md#section-i--exit-0x5260x537) | unchanged |
+
+Everything the product **changed or added** — the five control-flow redirects,
+the appended new code regions, the Shift table, the click/delete logic, the
+two-pane draw, and the persistent delete helper — is disassembled below in this
+file under [Control-flow patches](#control-flow-patches) and the sections that
+follow it.
+
 ## Runtime memory usage
 
-The unchanged BSS layout from `poc-04/note-edit` still applies, with one extra
-product-specific slot now used:
+The BSS layout is inherited unchanged from `poc-04/note-edit`, tabulated in that
+file's [BSS map](../../../../../experiments/poc-04-notes-x11/note-edit.md#bss-map).
+Within the shared 32-byte event buffer at `0x404000`, the product's new click and
+Shift handlers additionally read these fields, and one new slot is added:
 
-- `0x404804` — selected row index, initialised to `-1`
+- `0x404018` / `0x40401a` — `ButtonPress` event `x` / `y`, used by the [click handler](#click-handler)
+- `0x40401c` — event state byte; bit 0 (`ShiftMask`) is tested by the [Shift-aware key handler](#shift-aware-key-handler-0x400963)
+- `0x404804` — selected row index (product addition), initialised to `-1` by the [startup stub](#startup-stub)
 
 ## Known limitations
 

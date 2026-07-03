@@ -115,65 +115,83 @@ Raw bytes:
 73 00 00 00   ecall
 ```
 
-### Instruction-by-instruction
+### Instruction-by-instruction, with encodings
+
+RISC-V instructions here are fixed 32-bit words stored **little-endian**, so
+file bytes `13 05 10 00` are the word `0x00100513`. Only three encodings are
+used:
+
+- **`ADDI rd, rs1, imm`** (I-type): `imm[31:20] rs1[19:15] 000[14:12]
+  rd[11:7] 0010011[6:0]`. With `rs1 = zero` (x0, hardwired 0) this is a plain
+  load-immediate; the low byte of every `addi` word here is `13` or `93`
+  because opcode `0010011` = `0x13` and `rd` spills one bit into byte 1.
+- **`AUIPC rd, imm20`** (U-type): `imm[31:12] rd[11:7] 0010111[6:0]`.
+  Adds `imm20 << 12` to the current PC — with `imm20 = 0` it just copies PC
+  into `rd`. This is how position-relative addressing is done without a
+  dedicated `adr` instruction.
+- **`ECALL`**: the SYSTEM word `0x00000073` — traps into the Linux kernel.
+
+Register numbers used: `a0` = x10, `a1` = x11, `a2` = x12, `a7` = x17.
 
 #### 1. `13 05 10 00` — `addi a0, zero, 1`
 
-Sets:
-
-- `a0 = 1` (stdout fd)
+Word `0x00100513`: opcode `0x13`, `rd` (bits 11–7) = 10 (`a0`), `rs1`
+(bits 19–15) = 0 (`zero`), `imm` (bits 31–20) = 1.
+Sets `a0 = 1` — the stdout file descriptor (syscall arg 1).
 
 #### 2. `97 05 00 00` — `auipc a1, 0`
 
-Loads the current PC (`0x40007c`) into `a1`.
+Word `0x00000597`: opcode `0x17` (AUIPC), `rd` = 11 (`a1`), `imm20` = 0.
+Loads the address of this instruction into `a1`:
+
+```text
+a1 = PC = 0x40007c
+```
 
 #### 3. `93 85 05 02` — `addi a1, a1, 32`
 
-Adds 32, producing:
+Word `0x02058593`: `rd` = 11 (`a1`), `rs1` = 11 (`a1`), `imm` = `0x020` = 32.
+Completes the PC-relative address:
 
 ```text
-0x40007c + 0x20 = 0x40009c
+a1 = 0x40007c + 0x20 = 0x40009c   ; address of "Hello, rv64!\n"
 ```
 
-which is exactly the address of the inline string.
-
-This corrected `+32` immediate is important: an earlier bad build used `+28`,
-which pointed 4 bytes too early and printed part of the final `ecall` word.
+Note the offset is measured from the `auipc` at `0x40007c`, not from the
+entry point. This corrected `+32` immediate is important: an earlier bad
+build used `+28`, which pointed 4 bytes too early and printed part of the
+final `ecall` word.
 
 #### 4. `13 06 d0 00` — `addi a2, zero, 13`
 
-Sets the string length:
-
-- `a2 = 13`
+Word `0x00d00613`: `rd` = 12 (`a2`), `rs1` = 0, `imm` = 13.
+Sets `a2 = 13` — the byte length of `"Hello, rv64!\n"` (syscall arg 3).
 
 #### 5. `93 08 00 04` — `addi a7, zero, 64`
 
-Linux RISC-V syscall number:
-
-- `64 = write`
+Word `0x04000893`: `rd` = 17 (`a7`), `imm` = `0x040` = 64.
+On Linux RV64 the syscall number goes in `a7`; `64 = write` (RISC-V shares
+the generic Linux syscall table with AArch64, so `write`/`exit` are 64/93 on
+both, unlike x86_64's 1/60).
 
 #### 6. `73 00 00 00` — `ecall`
 
-Performs:
+Traps into the kernel. With `a7 = 64`, `a0 = 1`, `a1 = 0x40009c`, `a2 = 13`
+this performs:
 
 ```text
 write(1, 0x40009c, 13)
 ```
 
-On Linux RV64:
-
-- syscall number is in `a7`
-- arguments are in `a0`, `a1`, `a2`, ...
+The return value comes back in `a0` and is ignored.
 
 #### 7. `13 05 00 00` — `addi a0, zero, 0`
 
-Prepares exit status `0`.
+Word `0x00000513`: `rd` = 10 (`a0`), `imm` = 0. Prepares exit status `0`.
 
 #### 8. `93 08 d0 05` — `addi a7, zero, 93`
 
-Linux RISC-V syscall number:
-
-- `93 = exit`
+Word `0x05d00893`: `rd` = 17 (`a7`), `imm` = `0x05d` = 93 = `exit`.
 
 #### 9. `73 00 00 00` — `ecall`
 
@@ -182,6 +200,8 @@ Performs:
 ```text
 exit(0)
 ```
+
+Nothing executes past this word; the string data follows immediately.
 
 ## Inline data
 

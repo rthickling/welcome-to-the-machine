@@ -117,151 +117,268 @@ the low 2 bits set — which every conforming server does.
 
 ## Code walkthrough (648 bytes @ 0x400078)
 
-The body offset column is relative to the code start (vaddr `0x400078`).
+Every instruction is listed with its virtual address, raw bytes, and Intel
+mnemonic (file offset = `vaddr − 0x400000`). `note-view` shares the connect /
+handshake / resource-patch shape with `poc-04/note-edit`
+([Section A there](note-edit.md#section-a--connect-to-x-and-fetch-setup-reply-0x0780x1d8)),
+but its data base is `0x400300` (not `0x400700`) because the code is smaller,
+and it is a **read-only viewer**: it waits for an `Expose`, then re-reads and
+redraws `notes.db` with a **variable-length** `ImageText8` request per record.
 
-### Section A — Init (51 bytes, 0x000..0x033)
+### Section A — connect to the X server (`0x078..0x0a1`)
 
-| body | bytes                                       | insn                  |
-| ---- | ------------------------------------------- | --------------------- |
-| 0x00 | `b8 29 00 00 00`                            | `mov eax, 41` (socket)|
-| 0x05 | `bf 01 00 00 00`                            | `mov edi, 1` (AF_UNIX)|
-| 0x0a | `be 01 00 00 00`                            | `mov esi, 1` (SOCK_STREAM) |
-| 0x0f | `31 d2`                                     | `xor edx, edx`        |
-| 0x11 | `0f 05`                                     | `syscall`             |
-| 0x13 | `48 89 c3`                                  | `mov rbx, rax`        |
-| 0x16 | `b8 2a 00 00 00 / 48 89 df / be 00 03 40 00 / ba 14 00 00 00 / 0f 05` | `connect(rbx, 0x400300, 20)` |
-| 0x2a | `45 31 d2 / 45 31 c0 / 45 31 c9`            | zero r10d,r8d,r9d     |
-
-### Section B — X11 handshake (74 bytes, 0x033..0x07d)
-
-Send the 48-byte setup request from `0x400314`, receive the 8-byte reply
-header into `SETUP_BUF=0x401000`, extract `additional-data-length` (u16 at
-`SETUP_BUF+6`), multiply by 4, and recvfrom that many bytes into
-`SETUP_BUF+8`.
-
-| body | bytes                                        | insn / meaning        |
-| ---- | -------------------------------------------- | --------------------- |
-| 0x33 | `b8 2c ... be 14 03 40 00 ba 30 ... 0f 05`   | `sendto(rbx, 0x400314, 48, 0, 0, 0)` |
-| 0x47 | `41 ba 00 01 00 00`                          | `mov r10d, 0x100` (MSG_WAITALL) |
-| 0x4d | `b8 2d ... be 00 10 40 00 ba 08 ... 0f 05`   | `recvfrom(rbx, 0x401000, 8, MSG_WAITALL, 0, 0)` |
-| 0x61 | `0f b7 04 25 06 10 40 00 / c1 e0 02`         | `eax = *(u16*)0x401006 << 2` |
-| 0x6c | `89 c2 / b8 2d ... be 08 10 40 00 / 0f 05`   | `recvfrom(rbx, 0x401008, eax, MSG_WAITALL, 0, 0)` |
-
-### Section C — Create resources (228 bytes, 0x07d..0x161)
-
-The setup reply's `resource-id-base` is at reply offset 12 — i.e.
-`SETUP_BUF+12 = 0x40100c`. `r12d` is loaded from there once (`44 8b 24 25 0c
-10 40 00`) and then used repeatedly to patch template fields.
-
-Six 13-byte blocks patch the `[P]` fields listed above:
-
-```
-44 89 e0          mov eax, r12d
-83 c8 NN          or  eax, 1  | 2 | 3
-89 04 25 LL LL LL LL   mov [abs32], eax
+```text
+400078: b8 29 00 00 00        mov  eax, 0x29           ; __NR_socket (41)
+40007d: bf 01 00 00 00        mov  edi, 0x1            ; AF_UNIX
+400082: be 01 00 00 00        mov  esi, 0x1            ; SOCK_STREAM
+400087: 31 d2                 xor  edx, edx            ; protocol 0
+400089: 0f 05                 syscall
+40008b: 48 89 c3              mov  rbx, rax            ; rbx = X socket fd (held for life of process)
+40008e: b8 2a 00 00 00        mov  eax, 0x2a           ; __NR_connect (42)
+400093: 48 89 df              mov  rdi, rbx
+400096: be 00 03 40 00        mov  esi, 0x400300       ; sockaddr_un "/tmp/.X11-unix/X1"
+40009b: ba 14 00 00 00        mov  edx, 0x14           ; addrlen 20
+4000a0: 0f 05                 syscall
 ```
 
-followed by 20-byte `sendto` wrappers (one per request template). The four
-templates are sent in protocol-legal order: **CreateWindow** (40 B from
-`0x400344`), **ChangeProperty WM_NAME** (36 B from `0x40036c`), **OpenFont**
-(20 B from `0x400390`), **CreateGC** (28 B from `0x4003a4`), **MapWindow**
-(8 B from `0x4003c0`). The ImageText8 header at `0x4003d4` gets its
-`drawable` and `gc` fields patched here too so the redraw loop only has to
-patch three more fields (string-length, request-length, y).
+### Section B — X11 setup handshake (`0x0a2..0x0f4`)
 
-`xor r10d, r10d` is issued once before CreateWindow to switch from the
-MSG_WAITALL state left over from the handshake recvfroms.
+Send the 48-byte setup request, read the 8-byte reply header, then read the
+variable remainder whose length (in 4-byte units) sits at `SETUP_BUF+6`.
 
-### Section D — Event loop (66 bytes, 0x161..0x1a3)
-
-```
-event_loop:
-    mov r10d, 0x100              ; MSG_WAITALL
-    recvfrom(rbx, 0x404000, 32, MSG_WAITALL, 0, 0)
-    test rax, rax
-    jle  exit_app                ; EOF or error → connection gone
-    movzx al, [EVENT_BUF]
-    and  al, 0x7f                ; strip SendEvent bit
-    cmp  al, 12   ; Expose
-    je   handle_expose
-    cmp  al, 2    ; KeyPress
-    je   exit_app
-    cmp  al, 4    ; ButtonPress
-    je   exit_app
-    jmp  event_loop              ; ignore anything else (X errors etc.)
-```
-
-`jle exit_app` catches both `rax == 0` (socket closed by server, e.g. when
-the WM runs `XKillClient` after the user clicks the close button) and
-`rax < 0` (any recv error). Either way the window is gone, so we exit
-cleanly.
-
-### Section E — Redraw (inlined from `handle_expose`, 210 bytes, 0x1a3..0x275)
-
-On every Expose event:
-
-1.  `open("notes.db", O_RDONLY)`. If this fails, skip — the window still
-    exists, the loop goes back to `event_loop`.
-2.  Save fd in `r15`; initialise `r14w = 30` (first line's y-coord).
-3.  `read_loop`: read a 4-byte length prefix into `SCRATCH=0x404300`; bail
-    if less than 4 bytes come back (end-of-file).
-4.  Validate: reject length ≤ 0 or > 64 (records larger than the fixed
-    buffer are truncated-by-bail, not silently rendered wrong).
-5.  Read that many bytes into `RECORD_BUF = 0x404100`.
-6.  Strip a trailing `\n` (`poc-03/note` always writes one).
-7.  If the record is empty after stripping, skip to the y-increment.
-8.  Build the dynamic ImageText8 fields at `0x4003d4`:
-    ```
-    eax = request-units = 4 + ((n + 3) >> 2)   ; u16 at header+2
-    cl  = n                                    ; u8  at header+1
-    r14w = y                                   ; u16 at header+14
-    ```
-    then `rep movsb` copies `n` bytes from `RECORD_BUF` to
-    `IT8_STRBUF = 0x4003e4`. The X server reads exactly `n` ASCII bytes
-    regardless of any trailing pad bytes in the request stream.
-9.  `sendto(rbx, 0x4003d4, request-units * 4, 0, 0, 0)`.
-10. `r14w += 16`; jump back to `read_loop`.
-
-When the length read returns fewer than 4 bytes (clean EOF) or validation
-fails, we fall through to `redraw_close` — `close(r15)` — then
-`redraw_done`'s long jump returns to `event_loop`.
-
-### Section F — exit_app (19 bytes, 0x275..0x288)
-
-```
-close(rbx)   ; mov eax, 3 ; mov rdi, rbx ; syscall
-exit(0)      ; mov eax, 60 ; xor edi, edi ; syscall
+```text
+4000a2: 45 31 d2              xor  r10d, r10d          ; sendto flags = 0
+4000a5: 45 31 c0              xor  r8d, r8d            ; dest addr NULL (stays 0 for the whole run)
+4000a8: 45 31 c9              xor  r9d, r9d            ; addrlen 0
+4000ab: b8 2c 00 00 00        mov  eax, 0x2c           ; __NR_sendto (44)
+4000b0: 48 89 df              mov  rdi, rbx
+4000b3: be 14 03 40 00        mov  esi, 0x400314       ; setup request template
+4000b8: ba 30 00 00 00        mov  edx, 0x30           ; 48 bytes
+4000bd: 0f 05                 syscall
+4000bf: 41 ba 00 01 00 00     mov  r10d, 0x100         ; recvfrom flags = MSG_WAITALL
+4000c5: b8 2d 00 00 00        mov  eax, 0x2d           ; __NR_recvfrom (45)
+4000ca: 48 89 df              mov  rdi, rbx
+4000cd: be 00 10 40 00        mov  esi, 0x401000       ; SETUP_BUF
+4000d2: ba 08 00 00 00        mov  edx, 0x8            ; first 8 bytes
+4000d7: 0f 05                 syscall
+4000d9: 0f b7 04 25 06 10 40 00  movzx eax, WORD [0x401006] ; additional-data length (4-byte units)
+4000e1: c1 e0 02              shl  eax, 0x2            ; × 4 = remaining byte count
+4000e4: 89 c2                 mov  edx, eax
+4000e6: b8 2d 00 00 00        mov  eax, 0x2d           ; __NR_recvfrom
+4000eb: 48 89 df              mov  rdi, rbx
+4000ee: be 08 10 40 00        mov  esi, 0x401008       ; continue after the header
+4000f3: 0f 05                 syscall
 ```
 
-The X server will clean up any resources we allocated (WID, FID, GID) as
-soon as our side of the socket closes; no explicit `KillClient` / `FreeGC` /
-`CloseFont` / `DestroyWindow` requests are needed.
+### Section C — patch resource ids and create the window (`0x0f5..0x1d8`)
+
+`r12d` takes the resource-id base from `SETUP_BUF+12`. Each template field is
+patched with `base | 1/2/3` (window/font/gc), then the five bring-up requests
+are sent in protocol order. The `ImageText8` header's `drawable`/`gc` are
+pre-patched here so the redraw loop only fills in length and `y`.
+
+```text
+4000f5: 44 8b 24 25 0c 10 40 00  mov r12d, DWORD [0x40100c]  ; resource-id base
+4000fd: 44 89 e0              mov  eax, r12d
+400100: 83 c8 01              or   eax, 0x1            ; window id = base | 1
+400103: 89 04 25 48 03 40 00  mov  DWORD [0x400348], eax   ; CreateWindow.wid
+40010a: 45 31 d2              xor  r10d, r10d          ; sendto flags = 0 (leave MSG_WAITALL state)
+40010d: b8 2c 00 00 00        mov  eax, 0x2c
+400112: 48 89 df              mov  rdi, rbx
+400115: be 44 03 40 00        mov  esi, 0x400344       ; CreateWindow
+40011a: ba 28 00 00 00        mov  edx, 0x28           ; 40 bytes
+40011f: 0f 05                 syscall
+400121: 44 89 e0              mov  eax, r12d
+400124: 83 c8 01              or   eax, 0x1            ; window id | 1
+400127: 89 04 25 70 03 40 00  mov  DWORD [0x400370], eax   ; ChangeProperty.window
+40012e: b8 2c 00 00 00        mov  eax, 0x2c
+400133: 48 89 df              mov  rdi, rbx
+400136: be 6c 03 40 00        mov  esi, 0x40036c       ; ChangeProperty(WM_NAME="note-view")
+40013b: ba 24 00 00 00        mov  edx, 0x24           ; 36 bytes
+400140: 0f 05                 syscall
+400142: 44 89 e0              mov  eax, r12d
+400145: 83 c8 02              or   eax, 0x2            ; font id = base | 2
+400148: 89 04 25 94 03 40 00  mov  DWORD [0x400394], eax   ; OpenFont.fid
+40014f: b8 2c 00 00 00        mov  eax, 0x2c
+400154: 48 89 df              mov  rdi, rbx
+400157: be 90 03 40 00        mov  esi, 0x400390       ; OpenFont("fixed")
+40015c: ba 14 00 00 00        mov  edx, 0x14           ; 20 bytes
+400161: 0f 05                 syscall
+400163: 44 89 e0              mov  eax, r12d
+400166: 83 c8 03              or   eax, 0x3            ; gc id = base | 3
+400169: 89 04 25 a8 03 40 00  mov  DWORD [0x4003a8], eax   ; CreateGC.gc
+400170: 44 89 e0              mov  eax, r12d
+400173: 83 c8 01              or   eax, 0x1            ; window id | 1
+400176: 89 04 25 ac 03 40 00  mov  DWORD [0x4003ac], eax   ; CreateGC.drawable (the window)
+40017d: 44 89 e0              mov  eax, r12d
+400180: 83 c8 02              or   eax, 0x2            ; font id | 2
+400183: 89 04 25 bc 03 40 00  mov  DWORD [0x4003bc], eax   ; CreateGC.font value
+40018a: b8 2c 00 00 00        mov  eax, 0x2c
+40018f: 48 89 df              mov  rdi, rbx
+400192: be a4 03 40 00        mov  esi, 0x4003a4       ; CreateGC
+400197: ba 1c 00 00 00        mov  edx, 0x1c           ; 28 bytes
+40019c: 0f 05                 syscall
+40019e: 44 89 e0              mov  eax, r12d
+4001a1: 83 c8 01              or   eax, 0x1            ; window id | 1
+4001a4: 89 04 25 c4 03 40 00  mov  DWORD [0x4003c4], eax   ; MapWindow.window
+4001ab: b8 2c 00 00 00        mov  eax, 0x2c
+4001b0: 48 89 df              mov  rdi, rbx
+4001b3: be c0 03 40 00        mov  esi, 0x4003c0       ; MapWindow
+4001b8: ba 08 00 00 00        mov  edx, 0x8            ; 8 bytes
+4001bd: 0f 05                 syscall
+4001bf: 44 89 e0              mov  eax, r12d
+4001c2: 83 c8 01              or   eax, 0x1            ; window id | 1
+4001c5: 89 04 25 d8 03 40 00  mov  DWORD [0x4003d8], eax   ; ImageText8.drawable
+4001cc: 44 89 e0              mov  eax, r12d
+4001cf: 83 c8 03              or   eax, 0x3            ; gc id | 3
+4001d2: 89 04 25 dc 03 40 00  mov  DWORD [0x4003dc], eax   ; ImageText8.gc
+```
+
+### Section D — event loop (`0x1d9..0x21a`)
+
+Unlike `note-edit`, `note-view` does **not** draw immediately; it blocks for
+events and only redraws on `Expose`. A key press, button press, or closed
+socket exits.
+
+```text
+4001d9: 41 ba 00 01 00 00     mov  r10d, 0x100         ; MSG_WAITALL
+4001df: b8 2d 00 00 00        mov  eax, 0x2d           ; __NR_recvfrom
+4001e4: 48 89 df              mov  rdi, rbx
+4001e7: be 00 40 40 00        mov  esi, 0x404000       ; EVENT_BUF
+4001ec: ba 20 00 00 00        mov  edx, 0x20           ; 32-byte event
+4001f1: 0f 05                 syscall
+4001f3: 48 85 c0              test rax, rax
+4001f6: 0f 8e f1 00 00 00     jle  0x4002ed           ; <=0 (closed/error) → exit_app
+4001fc: 8a 04 25 00 40 40 00  mov  al, [0x404000]      ; EVENT_BUF[0] = type
+400203: 24 7f                 and  al, 0x7f            ; strip send_event bit
+400205: 3c 0c                 cmp  al, 0x0c
+400207: 74 12                 je   0x40021b           ; Expose (12) → redraw
+400209: 3c 02                 cmp  al, 0x02
+40020b: 0f 84 dc 00 00 00     je   0x4002ed           ; KeyPress (2) → exit
+400211: 3c 04                 cmp  al, 0x04
+400213: 0f 84 d4 00 00 00     je   0x4002ed           ; ButtonPress (4) → exit
+400219: eb be                 jmp  0x4001d9           ; ignore anything else
+```
+
+`jle` at `0x4001f6` handles both `rax == 0` (WM closed the window via
+`KillClient` → socket EOF) and `rax < 0` (any error): either way the window is
+gone, so we exit.
+
+### Section E — redraw on Expose (`0x21b..0x2ec`)
+
+Opens `notes.db`, then for each length-prefixed record builds a
+**variable-length** `ImageText8` request sized to that record and sends it at
+the next `y`. This is the key contrast with `note-edit`, which always sends a
+fixed 80-byte (64-char) request.
+
+```text
+40021b: b8 02 00 00 00        mov  eax, 0x2           ; __NR_open
+400220: bf c8 03 40 00        mov  edi, 0x4003c8       ; "notes.db"
+400225: 31 f6                 xor  esi, esi            ; O_RDONLY
+400227: 31 d2                 xor  edx, edx
+400229: 0f 05                 syscall
+40022b: 48 85 c0              test rax, rax
+40022e: 0f 88 b4 00 00 00     js   0x4002e8           ; open failed → back to event loop
+400234: 49 89 c7              mov  r15, rax            ; r15 = db fd
+400237: 41 be 1e 00 00 00     mov  r14d, 0x1e         ; y = 30 (first line)
+; --- read the 4-byte length prefix ---
+40023d: 31 c0                 xor  eax, eax           ; __NR_read (0)
+40023f: 4c 89 ff              mov  rdi, r15
+400242: be 00 43 40 00        mov  esi, 0x404300       ; SCRATCH (length word)
+400247: ba 04 00 00 00        mov  edx, 0x4
+40024c: 0f 05                 syscall
+40024e: 48 83 f8 04           cmp  rax, 0x4            ; full prefix?
+400252: 0f 85 86 00 00 00     jne  0x4002de           ; EOF / short read → close
+400258: 8b 0c 25 00 43 40 00  mov  ecx, [0x404300]    ; record length
+40025f: 83 f9 00              cmp  ecx, 0x0
+400262: 7e 7a                 jle  0x4002de           ; length <= 0 → close
+400264: 83 f9 40              cmp  ecx, 0x40
+400267: 7f 75                 jg   0x4002de           ; length > 64 → close (buffer cap)
+; --- read the record body ---
+400269: 89 ca                 mov  edx, ecx
+40026b: 31 c0                 xor  eax, eax           ; __NR_read
+40026d: 4c 89 ff              mov  rdi, r15
+400270: be 00 41 40 00        mov  esi, 0x404100       ; RECORD_BUF
+400275: 0f 05                 syscall
+400277: 48 85 c0              test rax, rax
+40027a: 7e 62                 jle  0x4002de           ; error/EOF → close
+40027c: 89 c1                 mov  ecx, eax            ; ecx = bytes read
+40027e: 8a 81 ff 40 40 00     mov  al, [rcx+0x4040ff] ; last byte (RECORD_BUF+len-1)
+400284: 3c 0a                 cmp  al, 0xa
+400286: 75 03                 jne  0x40028b
+400288: 83 e9 01              sub  ecx, 0x1            ; strip trailing newline
+40028b: 83 f9 00              cmp  ecx, 0x0
+40028e: 7e 44                 jle  0x4002d4           ; empty after strip → just advance y
+; --- build the variable-length ImageText8 request ---
+400290: 8d 41 03              lea  eax, [rcx+0x3]
+400293: c1 e8 02              shr  eax, 0x2           ; (n+3) >> 2  = string words
+400296: 83 c0 04              add  eax, 0x4           ; + 4 header words = request length (units)
+400299: 88 0c 25 d5 03 40 00  mov  [0x4003d5], cl     ; header byte 1 = string length n
+4002a0: 66 89 04 25 d6 03 40 00  mov WORD [0x4003d6], ax ; header word 2 = request length (units)
+4002a8: 66 44 89 34 25 e2 03 40 00  mov WORD [0x4003e2], r14w ; header word 14 = y
+4002b1: be 00 41 40 00        mov  esi, 0x404100       ; RECORD_BUF
+4002b6: bf e4 03 40 00        mov  edi, 0x4003e4       ; ImageText8 string buffer
+4002bb: f3 a4                 rep movsb                ; copy n bytes (ecx = n)
+4002bd: c1 e0 02              shl  eax, 0x2           ; request length × 4 = byte count
+4002c0: 89 c2                 mov  edx, eax
+4002c2: 45 31 d2              xor  r10d, r10d          ; sendto flags = 0
+4002c5: b8 2c 00 00 00        mov  eax, 0x2c           ; __NR_sendto
+4002ca: 48 89 df              mov  rdi, rbx
+4002cd: be d4 03 40 00        mov  esi, 0x4003d4       ; ImageText8 request
+4002d2: 0f 05                 syscall
+4002d4: 66 41 83 c6 10        add  r14w, 0x10         ; next line y += 16
+4002d9: e9 5f ff ff ff        jmp  0x40023d           ; next record
+; --- done: close db, return to event loop ---
+4002de: b8 03 00 00 00        mov  eax, 0x3           ; __NR_close
+4002e3: 4c 89 ff              mov  rdi, r15
+4002e6: 0f 05                 syscall
+4002e8: e9 ec fe ff ff        jmp  0x4001d9           ; back to the event loop
+```
+
+The request-length arithmetic `4 + ((n+3) >> 2)` rounds the `n`-byte string up
+to whole 4-byte units and adds the four header words, so the `sendto` byte
+count (`× 4`) is always a legal X11 request length with no padding sent beyond
+what the string needs.
+
+### Section F — exit_app (`0x2ed..0x2ff`)
+
+```text
+4002ed: b8 03 00 00 00        mov  eax, 0x3           ; __NR_close
+4002f2: 48 89 df              mov  rdi, rbx            ; X socket
+4002f5: 0f 05                 syscall
+4002f7: b8 3c 00 00 00        mov  eax, 0x3c          ; __NR_exit (60)
+4002fc: 31 ff                 xor  edi, edi           ; status 0
+4002fe: 0f 05                 syscall
+```
+
+Closing the socket makes the server free the window, font, and GC — no explicit
+`KillClient` / `FreeGC` / `CloseFont` / `DestroyWindow` is needed.
 
 ## Syscalls used
 
-| nr | name       | where                                    |
-| -- | ---------- | ---------------------------------------- |
-|  0 | `read`     | E.3, E.5 (read length prefix + body)     |
-|  2 | `open`     | E.1 (`notes.db`)                         |
-|  3 | `close`    | redraw_close (db fd), exit_app (socket)  |
-| 41 | `socket`   | A.1                                      |
-| 42 | `connect`  | A.2                                      |
-| 44 | `sendto`   | all X11 outbound requests                |
-| 45 | `recvfrom` | handshake + event loop + body read       |
-| 60 | `exit`     | exit_app                                 |
+| nr | name       | where                                                    |
+| -- | ---------- | -------------------------------------------------------- |
+|  0 | `read`     | `0x40023d`, `0x40026b` (length prefix + record body)      |
+|  2 | `open`     | `0x40021b` (`notes.db`)                                   |
+|  3 | `close`    | `0x4002de` (db fd), `0x4002ed` (socket)                   |
+| 41 | `socket`   | `0x400078`                                                |
+| 42 | `connect`  | `0x40008e`                                                |
+| 44 | `sendto`   | all X11 outbound requests (setup, bring-up, `ImageText8`) |
+| 45 | `recvfrom` | handshake (`0x4000c5`, `0x4000e6`) + event loop (`0x4001df`) |
+| 60 | `exit`     | `0x4002f7`                                                |
 
 Eight syscalls total. No `libc`, no `libX11`, no dynamic linker.
 
 ## X11 opcodes and events used
 
-| Opcode | Name            | Where          |
-| ------ | --------------- | -------------- |
-|  1     | CreateWindow    | C.3            |
-|  8     | MapWindow       | C.11           |
-| 18     | ChangeProperty  | C.5 (WM_NAME)  |
-| 45     | OpenFont        | C.7            |
-| 55     | CreateGC        | C.9            |
-| 76     | ImageText8      | E.10/11        |
+| Opcode | Name            | Sent from (`sendto` at)   |
+| ------ | --------------- | ------------------------- |
+|  1     | CreateWindow    | `0x40010d`                |
+|  8     | MapWindow       | `0x4001ab`                |
+| 18     | ChangeProperty  | `0x40012e` (WM_NAME)      |
+| 45     | OpenFont        | `0x40014f`                |
+| 55     | CreateGC        | `0x40018a`                |
+| 76     | ImageText8      | `0x4002c5` (per record)   |
 
 | Event code | Name         | Handling            |
 | ---------- | ------------ | ------------------- |

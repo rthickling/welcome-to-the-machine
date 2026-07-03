@@ -120,54 +120,60 @@ a8 0b 80 d2   ; mov  x8, #93
 
 Exactly 8 instructions, exactly 32 bytes.
 
-### Instruction-by-instruction
+### Instruction-by-instruction, with encodings
+
+Seven of the eight words are **byte-identical** to `poc-06/hello`, whose doc
+decodes the `ADR` / `MOVZ` / `SVC` encodings field-by-field —
+see [`experiments/poc-06-linux-arm64/hello.md`](../poc-06-linux-arm64/hello.md#instruction-by-instruction-with-encodings).
+The only differing word is instruction 3 (the string length: 16 here vs 14).
 
 #### 1. `01 01 00 10` — `adr x1, msg`
 
-This computes the address of the inline greeting string relative to the current
-program counter, which is why the binary stays valid as a PIE.
-
-`msg` lives immediately after the 32-byte code block, at virtual address:
+Word `0x10000101`, same encoding as poc-06: `immhi = 8`, `immlo = 0`, so the
+offset is `(8 << 2) | 0` = 32 bytes forward from the instruction's own PC.
+This is the instruction that makes the PIE property real: the address is
+computed relative to wherever the segment was actually loaded, never from an
+absolute constant. At the link-time base:
 
 ```text
-0x10078 + 0x20 = 0x10098
+x1 = PC + 32 = 0x10078 + 0x20 = 0x10098   ; address of "Hello, android!\n"
 ```
+
+If the kernel/loader relocates the `ET_DYN` image to base `B`, the same word
+yields `B + 0x98` with no relocation records needed.
 
 #### 2. `20 00 80 d2` — `mov x0, #1`
 
-Sets:
-
-- `x0 = 1` (stdout fd)
+MOVZ word `0xd2800020` (`imm16 = 1`, `Rd = 0`): `x0 = 1`, the stdout fd.
 
 #### 3. `02 02 80 d2` — `mov x2, #16`
 
-Sets the string length:
-
-- `x2 = 16`
+MOVZ word `0xd2800202`: `imm16` (bits 20–5) = `0x10` = 16, `Rd` (bits 4–0) =
+2. Sets `x2 = 16` — the byte length of `"Hello, android!\n"`. This is the one
+word that differs from poc-06 (`0xd28001c2`, length 14): the immediate field
+moved from `14 << 5 = 0x1c0` to `16 << 5 = 0x200` inside the word.
 
 #### 4. `08 08 80 d2` — `mov x8, #64`
 
-Linux AArch64 syscall number:
-
-- `64 = write`
+MOVZ word `0xd2800808` (`imm16 = 64`, `Rd = 8`): Linux AArch64 syscall number
+`64 = write` in `x8` — the same generic-syscall-table numbers apply to
+Android's Linux kernel.
 
 #### 5. `01 00 00 d4` — `svc #0`
 
-Performs:
+Traps into the kernel:
 
 ```text
-write(1, 0x10098, 16)
+write(1, x1, 16)     ; x1 = load_base + 0x98
 ```
 
 #### 6. `00 00 80 d2` — `mov x0, #0`
 
-Prepares exit status `0`.
+MOVZ word `0xd2800000`: exit status `0`.
 
 #### 7. `a8 0b 80 d2` — `mov x8, #93`
 
-Linux AArch64 syscall number:
-
-- `93 = exit`
+MOVZ word `0xd2800ba8` (`imm16 = 93`, `Rd = 8`): syscall `93 = exit`.
 
 #### 8. `01 00 00 d4` — `svc #0`
 
