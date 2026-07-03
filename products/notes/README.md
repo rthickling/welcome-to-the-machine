@@ -18,14 +18,14 @@ the verifier binary, and the verifier Markdown together.
 
 | Target | Status | Directory |
 | --- | --- | --- |
-| Linux x86_64 | Raw-X11 reference build with printable input, uppercase/symbols, borders, colors, load, save, and delete. | [`targets/linux/x86_64/`](targets/linux/x86_64/) |
-| Linux ARM64 | GUI scaffold/container and structural verifier. | [`targets/linux/arm64/`](targets/linux/arm64/) |
-| Windows x86_64 | Runnable two-pane Win32 GUI with editor, list, `Add`, and `Delete`. | [`targets/windows/x86_64/`](targets/windows/x86_64/) |
+| Linux x86_64 | Session-independent raw-X11 reference build: runtime `DISPLAY`/cookie/root-window discovery, printable input, uppercase/symbols, borders, colors, load, save, delete, and `WM_DELETE_WINDOW` close. | [`targets/linux/x86_64/`](targets/linux/x86_64/) |
+| Linux ARM64 | Full hand-authored AArch64 raw-X11 port of the flagship: session discovery, two-pane GUI, `notes.db` load, keyboard entry, `Enter`-save, click-to-load, `WM_DELETE` close. Verified under `qemu-aarch64-static`. | [`targets/linux/arm64/`](targets/linux/arm64/) |
+| Windows x86_64 | Runnable two-pane Win32 GUI with `notes.db` persistence, click-to-load, `Enter`/`Add` save, sorted list, and `Delete`. | [`targets/windows/x86_64/`](targets/windows/x86_64/) |
 | Windows ARM64 | GUI-subsystem scaffold/container and structural verifier. | [`targets/windows/arm64/`](targets/windows/arm64/) |
 | macOS arm64 | Mach-O GUI scaffold/container and structural verifier. | [`targets/apple/macos-arm64/`](targets/apple/macos-arm64/) |
 | iOS arm64 | Mach-O GUI scaffold/container and structural verifier. | [`targets/apple/ios-arm64/`](targets/apple/ios-arm64/) |
-| Android | NativeActivity APK with native framebuffer-rendered panes and structural verifier. | [`targets/android/`](targets/android/) |
-| WebAssembly | Browser-hosted Wasm GUI module and structural verifier. | [`targets/wasm/`](targets/wasm/) |
+| Android | NativeActivity APK with native framebuffer-rendered panes, on-screen keyboard, sort, tap-to-edit, delete, and persistence; emulator-audited against the contract (storage format is the one known deviation). | [`targets/android/`](targets/android/) |
+| WebAssembly | Browser-hosted Wasm GUI module that owns the note list, first-word rendering, and click hit-testing in-module; structural verifier. | [`targets/wasm/`](targets/wasm/) |
 
 Browser runner files for the Wasm target live in [`runners/web/`](runners/web/).
 

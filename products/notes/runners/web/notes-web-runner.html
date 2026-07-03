@@ -45,7 +45,10 @@
   <main>
     <canvas id="notes" width="600" height="400" tabindex="0" aria-label="Notes WebAssembly UI"></canvas>
     <div class="hint">
-      Type printable text. Backspace edits. Enter saves. Click a saved first-word row to reload it into the editor.
+      Type printable text. Backspace edits. Enter saves. Click a saved first-word
+      row to reload it into the editor. The list, first-word derivation, and
+      click hit-testing now live inside the Wasm module; the host only supplies
+      stored records and persists saves.
     </div>
   </main>
 
@@ -64,6 +67,11 @@
       return `#${(pixel >>> 0).toString(16).padStart(6, "0").slice(-6)}`;
     }
 
+    // Shared record format matching the other Notes targets and the Wasm
+    // module's `load` parser: a run of [u32 little-endian length][length bytes].
+    const RECORDS_ADDR = 0x200; // staging region the module parses on load()
+    const RECORDS_LIMIT = 0x800 - RECORDS_ADDR; // stay below the module's index table
+
     function savedNotes() {
       try {
         const parsed = JSON.parse(localStorage.getItem(storageKey) || "[]");
@@ -77,24 +85,39 @@
       localStorage.setItem(storageKey, JSON.stringify(notes));
     }
 
-    function drawSavedNotes() {
-      const notes = savedNotes();
-      ctx.save();
-      ctx.fillStyle = foreground;
-      ctx.font = "16px monospace";
-      notes.slice(0, 20).forEach((note, index) => {
-        const firstWord = note.trim().split(/\s+/, 1)[0] || note;
-        ctx.fillText(firstWord, 360, 46 + index * 16);
-      });
-      ctx.restore();
-    }
-
     function readMemory(ptr, len) {
       return decoder.decode(new Uint8Array(memory.buffer, ptr, len));
     }
 
-    function repaintListSoon() {
-      requestAnimationFrame(drawSavedNotes);
+    // Serialise the stored notes into module memory and hand ownership of the
+    // list to the module: it derives first words, renders the rows, and
+    // hit-tests clicks itself.
+    function pushRecordsAndLoad() {
+      const notes = savedNotes();
+      const u8 = new Uint8Array(memory.buffer);
+      const dv = new DataView(memory.buffer);
+      let pos = 0;
+      for (const note of notes) {
+        const b = encoder.encode(note);
+        if (pos + 4 + b.length > RECORDS_LIMIT) break;
+        dv.setUint32(RECORDS_ADDR + pos, b.length, true);
+        pos += 4;
+        u8.set(b, RECORDS_ADDR + pos);
+        pos += b.length;
+      }
+      instance.exports.load(pos);
+    }
+
+    let reloadQueued = false;
+    function queueReload() {
+      // save() runs inside a module call; defer load() until it unwinds so we
+      // do not re-enter the instance.
+      if (reloadQueued) return;
+      reloadQueued = true;
+      queueMicrotask(() => {
+        reloadQueued = false;
+        pushRecordsAndLoad();
+      });
     }
 
     const imports = {
@@ -119,9 +142,6 @@
           ctx.fillStyle = foreground;
           ctx.font = "16px monospace";
           ctx.fillText(value, x, y);
-          if (value === "Words") {
-            repaintListSoon();
-          }
         },
         save(ptr, len) {
           const value = readMemory(ptr, len).trimEnd();
@@ -130,19 +150,10 @@
           notes.push(value);
           notes.sort((a, b) => a.localeCompare(b));
           setSavedNotes(notes);
-          repaintListSoon();
+          queueReload();
         },
       },
     };
-
-    function sendTextToWasm(text) {
-      for (let i = 0; i < 63; i += 1) {
-        instance.exports.key(8);
-      }
-      for (const byte of encoder.encode(text).slice(0, 63)) {
-        instance.exports.key(byte);
-      }
-    }
 
     canvas.addEventListener("keydown", (event) => {
       if (!instance) return;
@@ -169,14 +180,9 @@
       const rect = canvas.getBoundingClientRect();
       const x = Math.floor((event.clientX - rect.left) * (canvas.width / rect.width));
       const y = Math.floor((event.clientY - rect.top) * (canvas.height / rect.height));
+      // The module owns hit-testing: it maps the click to a list row and loads
+      // that note back into the editor, then repaints.
       instance.exports.click(x, y);
-      if (x >= 360 && y >= 46) {
-        const row = Math.floor((y - 46) / 16);
-        const note = savedNotes()[row];
-        if (note) {
-          sendTextToWasm(note);
-        }
-      }
       canvas.focus();
     });
 
@@ -187,6 +193,7 @@
       instance = result.instance;
       memory = instance.exports.memory;
       instance.exports.init();
+      pushRecordsAndLoad();
       canvas.focus();
     }
 

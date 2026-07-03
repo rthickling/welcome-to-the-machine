@@ -1,13 +1,13 @@
 # `products/notes/test-notes-linux-x86_64`
 
-`test-notes-linux-x86_64` is a **452-byte** statically-linked Linux ELF64
+`test-notes-linux-x86_64` is a **509-byte** statically-linked Linux ELF64
 x86_64 binary. It is a headless structural verifier for the Linux product
 reference build `./notes-linux-x86_64`.
 
 Terminology for [BSS](../../../glossary.md#bss), syscalls, and similar implementation
 phrases: [product notes glossary](../../../glossary.md).
 
-It checks eight anchored byte ranges:
+It checks eleven anchored byte ranges:
 
 1. window title `notes-x64` at file offset `0x784`
 2. left-pane label `Note:` at file offset `0x824`
@@ -17,6 +17,13 @@ It checks eight anchored byte ranges:
 6. expanded printable keymap row at `0x83e`
 7. border helper call at `0x549`
 8. border helper prefix at `0x92a`
+9. session-bootstrap entry redirect `e9 3e 0a 00 00` at `0x78`
+10. `find_env` prologue at `0xa48`
+11. session-bootstrap `socket`-resume tail at `0xbce`
+
+The last three anchors were added when the product became session-independent:
+they lock down the runtime `DISPLAY`/cookie/root-window discovery code so a
+regression there is caught by the always-runnable structural check.
 
 Exit status:
 
@@ -39,11 +46,15 @@ expected file layout.
 0x000..0x077   120   ELF header + PT_LOAD program header
 0x078..0x0fc   133   open + descriptor-driven pread64/compare loop + exits
 0x0fd..0x10f    19   path string "notes-linux-x86_64\0"
-0x110..0x16f    96   eight 12-byte check descriptors
-0x170..0x1c3    84   expected byte ranges
+0x110..0x193   132   eleven 12-byte check descriptors
+0x194..0x1fc   105   expected byte ranges
 ```
 
-Total file size: `452` bytes.
+Total file size: `509` bytes.
+
+The only code change from the eight-descriptor revision is the descriptor count
+immediate at `0x9c` (`0x08` → `0x0b`); the descriptor-base at `0x94` is still
+`0x400110`. Everything else in the code walk-through below is unchanged.
 
 ## The shared descriptor-driven verifier (canonical reference)
 
@@ -97,7 +108,7 @@ fixed `0x400078` entry point.
 40008b: 0f 88 60 00 00 00             js      0x4000f1          ; fail
 400091: 48 89 c3                      mov     rbx, rax          ; fd
 400094: 41 bc 10 01 40 00             mov     r12d, 0x400110    ; descriptors
-40009a: 41 bd 08 00 00 00             mov     r13d, 0x8         ; count
+40009a: 41 bd 0b 00 00 00             mov     r13d, 0xb         ; count (11 descriptors)
 
 4000a0: b8 11 00 00 00                mov     eax, 0x11         ; __NR_pread64
 4000a5: 48 89 df                      mov     rdi, rbx
@@ -137,6 +148,9 @@ fixed `0x400078` entry point.
                   0a 00 61 73 64 66 67 68 6a 6b 6c 3b 27 60 00 5c
 0x549 len 0x05 -> e8 dc 03 00 00
 0x92a len 0x10 -> 8b 04 25 d8 07 40 00 89 04 25 30 0a 40 00 8b 04
+0x078 len 0x05 -> e9 3e 0a 00 00                     (entry -> session bootstrap)
+0xa48 len 0x06 -> 48 8b 07 48 85 c0                  (find_env prologue)
+0xbce len 0x0a -> b8 29 00 00 00 e9 a5 f4 ff ff      (bootstrap socket-resume)
 ```
 
 ## Embedded path

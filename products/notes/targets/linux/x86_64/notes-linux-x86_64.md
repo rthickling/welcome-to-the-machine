@@ -1,11 +1,20 @@
 # `products/notes/notes-linux-x86_64`
 
-`notes-linux-x86_64` is a **2632-byte** statically-linked Linux ELF64 x86_64
+`notes-linux-x86_64` is a **3375-byte** statically-linked Linux ELF64 x86_64
 binary. It is the first product-oriented note tool in the repo and is derived
 directly from the earlier raw-X11 editor documented in
 [`experiments/poc-04-notes-x11/note-edit.md`](../../../../../experiments/poc-04-notes-x11/note-edit.md).
 
-The file keeps most of the same machine code, but appends a small border /
+Unlike `poc-04/note-edit`, this build is **session-independent**: at startup it
+reads `DISPLAY`, `XAUTHORITY`/`HOME` from the process environment, loads the
+current `MIT-MAGIC-COOKIE-1` from the `.Xauthority` file, and takes the root
+window id from the live X11 setup reply. Nothing about the X session is baked
+into the file any more, so the same committed binary runs on any local session
+without being rebuilt. It also registers `WM_DELETE_WINDOW` so the window
+manager's close button quits the process gracefully.
+
+The file keeps most of the same machine code, but appends a runtime
+session-discovery region, a `WM_DELETE_WINDOW` handshake, a small border /
 Shift-key helper region and patches the title, labels, draw path, and event dispatch so the UI
 behaves like a two-pane note tool:
 
@@ -34,12 +43,15 @@ which also [links to the glossary](../../../glossary.md) for implementation name
 
 Large parts of the binary are intentionally unchanged from `poc-04/note-edit`:
 
-- ELF header and `PT_LOAD`
-- X11 setup handshake and resource-id patching
-- hard-coded X socket / cookie / root window coupling
+- ELF header and `PT_LOAD` (only `p_filesz`/`p_memsz` differ, to cover the new code)
+- the core X11 setup handshake and resource-id patching
 - note loader and insertion sort
 - input buffer limits and the save/backspace paths
 - helper routines `fill_it8_spaces`, `send_it8`, and `exit_app`
+
+The X socket path, authentication cookie, and root window are **no longer**
+baked in: see [Runtime session discovery](#runtime-session-discovery-0xa48) for
+the code that fills them in at startup.
 
 `poc-04/note-edit` is the origin of those regions, and each one is documented
 opcode by opcode in
@@ -208,16 +220,47 @@ e9 1b 01 00 00
 `0x11b`, so control transferred to `0x4001de+0x11b = 0x4002f9`, the unmodified
 `poc-04` `redraw` / load entry.
 
-became:
+now reads:
 
 ```text
-e9 5b 03 00 00
+e9 85 0a 00 00
 ```
 
-**Execution logic:** relative displacement `0x35b` is added to
-`RIP_after_instruction = 0x4001de` (the byte after the five-byte jump), so the
-next instruction executed is `0x4001de+0x35b = 0x400539`, the new startup stub
-that initialises selection and then jumps into the old `redraw` path.
+**Execution logic:** relative displacement `0xa85` is added to
+`RIP_after_instruction = 0x4001de`, so the next instruction executed is
+`0x4001de+0xa85 = 0x400c63`, the [`WM_DELETE_WINDOW` handshake](#wm_delete_window-handshake-0xc1b).
+That routine interns the atoms, sets the `WM_PROTOCOLS` property on the window,
+and finishes with `jmp 0x400539` into the startup stub that initialises the
+selection slot and jumps into the old `redraw` path. So the effective order is
+still "bring window up, then draw", with the atom registration inserted first.
+
+### Entry redirect at `0x78` and reply-capture redirect at `0xf5`
+
+Two more control-flow patches make the binary session-independent:
+
+- The very first instruction at the ELF entry `0x400078` (originally
+  `mov eax, 0x29`, the `socket` number) is replaced with
+  `e9 3e 0a 00 00` = `jmp 0x400abb`, entering the
+  [session-discovery bootstrap](#runtime-session-discovery-0xa48). The bootstrap
+  re-loads `eax = 0x29` and jumps back to `0x40007d` so the original
+  `socket`/`connect` sequence runs with the socket path and cookie already
+  patched.
+- The resource-id capture at `0x4000f5` (originally the inline
+  `mov r12d, [0x40100c]` … `mov [0x400748], eax` group) is replaced with
+  `e9 de 0a 00 00` = `jmp 0x400bd8` (16 `nop` bytes pad the rest of the old
+  group), entering the [root-window patcher](#root-window-from-the-setup-reply-0xbd8).
+  That helper captures `r12d`, computes the SCREEN offset in the reply, copies
+  the live root window into the `CreateWindow` parent field, redoes the window-id
+  patch, and `jmp 0x40010a` back into the original `CreateWindow` send.
+
+### Event dispatch ignore-path redirect at `0x641`
+
+The dispatcher's "unknown event → back to `recvfrom`" jump at `0x400641`
+(originally `e9 6e fe ff ff` = `jmp 0x4004b4`) now reads `e9 cb 06 00 00` =
+`jmp 0x400d11`, the [`ClientMessage` check](#wm_delete_window-handshake-0xc1b).
+That stub exits the app when the message carries the `WM_DELETE_WINDOW` atom and
+otherwise falls back to `jmp 0x4004b4`, so every other event type is still
+ignored exactly as before.
 
 ### Draw redirect at `0x417`
 
@@ -285,6 +328,13 @@ section.
 | `0x963..0x9ab` | Shift-aware key handler |
 | `0x9ac..0xa2b` | 128-byte Shift translation table |
 | `0xa2c..0xa47` | `PolyRectangle` border request template |
+| `0xa48..0xa80` | `find_env` helper (scan `envp` for a prefix) |
+| `0xa81..0xaba` | environment / auth string constants |
+| `0xabb..0xbd7` | session-discovery bootstrap (`DISPLAY`, cookie, socket path) |
+| `0xbd8..0xc1a` | root-window patcher (reads root from setup reply) |
+| `0xc1b..0xc62` | `InternAtom`/`ChangeProperty` request templates |
+| `0xc63..0xd10` | `WM_DELETE_WINDOW` handshake |
+| `0xd11..0xd2e` | `ClientMessage` close check |
 
 ## Instruction-level logic for executable sequences
 
@@ -881,6 +931,295 @@ fixed-width 64-byte payload. That is larger than the minimal append path used by
 400909: e9 3b fc ff ff                jmp     0x400549                ; no disk update — refresh UI
 ```
 
+## Runtime session discovery (`0xa48`)
+
+This region is what makes the product session-independent. It runs before the
+first `socket` call and fills in the three values `poc-04/note-edit` baked into
+the file.
+
+### `find_env` helper (`0x400a48`)
+
+A tiny subroutine used three times by the bootstrap. Given `rdi` = the `envp`
+array pointer and `rsi` = a NUL-terminated prefix (e.g. `"DISPLAY="`), it walks
+the environment and returns in `rax` a pointer to the character just after the
+matched prefix, or `0` if no variable matches.
+
+```text
+; --- find_env(rdi = envp[], rsi = prefix) -> rax = value ptr or 0 ---
+400a48: 48 8b 07                  mov  rax, [rdi]        ; current env string ptr
+400a4b: 48 85 c0                  test rax, rax
+400a4e: 74 2e                     je   0x400a7e          ; NULL terminator: not found
+400a50: 56                        push rsi               ; save prefix start
+400a51: 50                        push rax               ; save env string start
+400a52: 48 89 f1                  mov  rcx, rsi          ; rcx walks the prefix
+400a55: 48 89 c2                  mov  rdx, rax          ; rdx walks the env string
+400a58: 44 8a 09                  mov  r9b, [rcx]        ; prefix byte
+400a5b: 45 84 c9                  test r9b, r9b
+400a5e: 74 18                     je   0x400a78          ; prefix exhausted: match
+400a60: 44 8a 12                  mov  r10b, [rdx]       ; env byte
+400a63: 45 38 d1                  cmp  r9b, r10b
+400a66: 75 08                     jne  0x400a70          ; mismatch: next env var
+400a68: 48 ff c1                  inc  rcx
+400a6b: 48 ff c2                  inc  rdx
+400a6e: eb e8                     jmp  0x400a58
+400a70: 58                        pop  rax               ; discard env start
+400a71: 5e                        pop  rsi               ; restore prefix
+400a72: 48 83 c7 08               add  rdi, 8            ; envp++
+400a76: eb d0                     jmp  0x400a48
+400a78: 48 89 d0                  mov  rax, rdx          ; rax = value pointer
+400a7b: 59                        pop  rcx               ; discard saved env start
+400a7c: 5e                        pop  rsi               ; restore prefix
+400a7d: c3                        ret
+400a7e: 31 c0                     xor  eax, eax          ; not found
+400a80: c3                        ret
+```
+
+The string constants it is called with live immediately after it:
+
+```text
+0x400a81  "DISPLAY=\0"
+0x400a8a  "XAUTHORITY=\0"
+0x400a96  "HOME=\0"
+0x400a9c  "/.Xauthority\0"
+0x400aa9  "MIT-MAGIC-COOKIE-1"   (18 bytes, no terminator)
+```
+
+### Bootstrap (`0x400abb`)
+
+Reached from the patched entry. On process entry `rsp` points at `argc`, so the
+environment array begins at `rsp + 8*argc + 16`. The bootstrap computes that,
+then does three things: patch the socket path display digit, and (via the auth
+file) patch the 16-byte cookie in the setup request. It ends by restoring the
+`socket` syscall number and jumping back into the original entry.
+
+```text
+; --- locate envp ---
+400abb: 48 8b 04 24               mov  rax, [rsp]              ; argc
+400abf: 48 8d 5c c4 10            lea  rbx, [rsp+rax*8+16]     ; rbx = &envp[0]
+; --- DISPLAY: patch the single display digit into the socket path ---
+400ac4: 48 89 df                  mov  rdi, rbx
+400ac7: be 81 0a 40 00            mov  esi, 0x400a81           ; "DISPLAY="
+400acc: e8 77 ff ff ff            call 0x400a48               ; find_env
+400ad1: 48 85 c0                  test rax, rax
+400ad4: 74 1c                     je   0x400af2                ; no DISPLAY: keep default
+400ad6: 8a 08                     mov  cl, [rax]               ; scan for ':'
+400ad8: 84 c9                     test cl, cl
+400ada: 74 16                     je   0x400af2
+400adc: 80 f9 3a                  cmp  cl, 0x3a                ; ':'
+400adf: 74 05                     je   0x400ae6
+400ae1: 48 ff c0                  inc  rax
+400ae4: eb f0                     jmp  0x400ad6
+400ae6: 48 ff c0                  inc  rax                     ; first digit after ':'
+400ae9: 8a 08                     mov  cl, [rax]
+400aeb: 88 0c 25 12 07 40 00      mov  [0x400712], cl          ; patch sockaddr_un digit
+; --- find the auth file: XAUTHORITY, else HOME + "/.Xauthority" ---
+400af2: 48 89 df                  mov  rdi, rbx
+400af5: be 8a 0a 40 00            mov  esi, 0x400a8a           ; "XAUTHORITY="
+400afa: e8 49 ff ff ff            call 0x400a48
+400aff: 48 85 c0                  test rax, rax
+400b02: 74 05                     je   0x400b09                ; not set: build from HOME
+400b04: 48 89 c7                  mov  rdi, rax                ; rdi = XAUTHORITY path
+400b07: eb 48                     jmp  0x400b51                ; have path
+400b09: 48 89 df                  mov  rdi, rbx
+400b0c: be 96 0a 40 00            mov  esi, 0x400a96           ; "HOME="
+400b11: e8 32 ff ff ff            call 0x400a48
+400b16: 48 85 c0                  test rax, rax
+400b19: 0f 84 af 00 00 00         je   0x400bce                ; no HOME: skip cookie
+400b1f: 48 89 c6                  mov  rsi, rax
+400b22: bf 00 70 40 00            mov  edi, 0x407000           ; scratch path buffer (BSS)
+400b27: 8a 0e                     mov  cl, [rsi]               ; copy HOME value
+400b29: 84 c9                     test cl, cl
+400b2b: 74 0a                     je   0x400b37
+400b2d: 88 0f                     mov  [rdi], cl
+400b2f: 48 ff c6                  inc  rsi
+400b32: 48 ff c7                  inc  rdi
+400b35: eb f0                     jmp  0x400b27
+400b37: be 9c 0a 40 00            mov  esi, 0x400a9c           ; "/.Xauthority"
+400b3c: 8a 0e                     mov  cl, [rsi]               ; append suffix incl NUL
+400b3e: 88 0f                     mov  [rdi], cl
+400b40: 84 c9                     test cl, cl
+400b42: 74 08                     je   0x400b4c
+400b44: 48 ff c6                  inc  rsi
+400b47: 48 ff c7                  inc  rdi
+400b4a: eb f0                     jmp  0x400b3c
+400b4c: bf 00 70 40 00            mov  edi, 0x407000           ; rdi = built path
+; --- open + read the auth file, then close ---
+400b51: b8 02 00 00 00            mov  eax, 0x2                ; __NR_open
+400b56: 31 f6                     xor  esi, esi                ; O_RDONLY
+400b58: 31 d2                     xor  edx, edx
+400b5a: 0f 05                     syscall
+400b5c: 48 85 c0                  test rax, rax
+400b5f: 0f 88 69 00 00 00         js   0x400bce                ; open failed: skip cookie
+400b65: 49 89 c0                  mov  r8, rax                 ; r8 = fd
+400b68: 31 c0                     xor  eax, eax                ; __NR_read
+400b6a: 4c 89 c7                  mov  rdi, r8
+400b6d: be 00 50 40 00            mov  esi, 0x405000           ; auth buffer (BSS)
+400b72: ba 00 10 00 00            mov  edx, 0x1000
+400b77: 0f 05                     syscall
+400b79: 50                        push rax                     ; save byte count
+400b7a: b8 03 00 00 00            mov  eax, 0x3                ; __NR_close
+400b7f: 4c 89 c7                  mov  rdi, r8
+400b82: 0f 05                     syscall
+400b84: 58                        pop  rax                     ; rax = bytes read
+; --- scan Xauthority records for a MIT-MAGIC-COOKIE-1 name ---
+400b85: 48 83 f8 14               cmp  rax, 0x14               ; sanity: enough bytes?
+400b89: 0f 8c 3f 00 00 00         jl   0x400bce
+400b8f: be 00 50 40 00            mov  esi, 0x405000           ; cursor
+400b94: 49 89 f3                  mov  r11, rsi
+400b97: 49 01 c3                  add  r11, rax
+400b9a: 49 83 eb 12               sub  r11, 18                 ; safe upper bound
+400b9e: 4c 39 de                  cmp  rsi, r11
+400ba1: 0f 87 27 00 00 00         ja   0x400bce                ; name not found
+400ba7: 56                        push rsi
+400ba8: bf a9 0a 40 00            mov  edi, 0x400aa9           ; "MIT-MAGIC-COOKIE-1"
+400bad: b9 12 00 00 00            mov  ecx, 18
+400bb2: fc                        cld
+400bb3: f3 a6                     repe cmpsb
+400bb5: 5e                        pop  rsi
+400bb6: 74 05                     je   0x400bbd                ; matched name
+400bb8: 48 ff c6                  inc  rsi
+400bbb: eb e1                     jmp  0x400b9e
+; --- found the name; the 16-byte cookie is 18(name)+2(len) bytes later ---
+400bbd: 48 8d 76 14               lea  rsi, [rsi+0x14]         ; -> cookie data
+400bc1: bf 34 07 40 00            mov  edi, 0x400734           ; setup request cookie field
+400bc6: b9 10 00 00 00            mov  ecx, 16
+400bcb: fc                        cld
+400bcc: f3 a4                     rep  movsb                   ; copy live cookie
+; --- resume the original entry: reload socket() number and jump back ---
+400bce: b8 29 00 00 00            mov  eax, 0x29               ; __NR_socket
+400bd3: e9 a5 f4 ff ff            jmp  0x40007d                ; original connect sequence
+```
+
+Notes on the Xauthority record walk: the file is a sequence of records, each a
+big-endian `u16`-length-prefixed `family / address / display-number / name /
+data`. Rather than fully parse the variable earlier fields, the code searches
+for the literal `MIT-MAGIC-COOKIE-1` name bytes; because that name is
+immediately followed by a 2-byte data length (`0x0010`) and the 16-byte cookie,
+the cookie is exactly 20 bytes past the start of the matched name. The first
+matching record is used, which is correct for a normal local session.
+
+### Root window from the setup reply (`0x400bd8`)
+
+Reached from the reply-capture redirect at `0x4000f5`. It reproduces the
+resource-id capture and window-id patch that the redirect overwrote, and in
+addition copies the **live root window** out of the first SCREEN structure of
+the connection setup reply.
+
+```text
+400bd8: 44 8b 24 25 0c 10 40 00   mov  r12d, [0x40100c]        ; resource-id base
+400be0: 0f b7 04 25 18 10 40 00   movzx eax, word [0x401018]   ; vendor string length
+400be8: 83 c0 03                  add  eax, 3
+400beb: 83 e0 fc                  and  eax, 0xfffffffc         ; pad up to 4 bytes
+400bee: 0f b6 0c 25 1d 10 40 00   movzx ecx, byte [0x40101d]   ; number of FORMATs
+400bf6: c1 e1 03                  shl  ecx, 3                  ; * 8 bytes each
+400bf9: 01 c8                     add  eax, ecx
+400bfb: 05 28 10 40 00            add  eax, 0x401028           ; base of first SCREEN
+400c00: 8b 08                     mov  ecx, [rax]              ; SCREEN.root window id
+400c02: 89 0c 25 4c 07 40 00      mov  [0x40074c], ecx         ; CreateWindow.parent
+400c09: 44 89 e0                  mov  eax, r12d
+400c0c: 83 c8 01                  or   eax, 1
+400c0f: 89 04 25 48 07 40 00      mov  [0x400748], eax         ; CreateWindow.wid (redone)
+400c16: e9 ef f4 ff ff            jmp  0x40010a                ; original CreateWindow send
+```
+
+The SCREEN offset arithmetic mirrors the X11 connection-setup layout: after the
+fixed 32-byte prologue of the additional-data block (`0x401008..0x401027`) comes
+the vendor string (padded to a 4-byte multiple), then `numFormats` eight-byte
+`FORMAT` entries, and then the first `SCREEN`, whose first field is the root
+window. Reading it at runtime means the same file works no matter what root id
+the server assigns.
+
+## `WM_DELETE_WINDOW` handshake (`0xc1b`)
+
+To make the window manager's close button quit the process gracefully (instead
+of the server tearing down the connection), the product interns the standard
+close-protocol atoms and advertises support via the `WM_PROTOCOLS` property.
+
+### Request templates (`0x400c1b`)
+
+```text
+0x400c1b  InternAtom("WM_PROTOCOLS")      20 bytes: 10 00 05 00 0c 00 00 00 + name
+0x400c2f  InternAtom("WM_DELETE_WINDOW")  24 bytes: 10 00 06 00 10 00 00 00 + name
+0x400c47  ChangeProperty template         28 bytes:
+          12 00 07 00                      ; opcode 18, mode Replace, length 7
+          00 00 00 00                      ; window   (patched to base|1)
+          00 00 00 00                      ; property (patched to WM_PROTOCOLS atom)
+          04 00 00 00                      ; type = ATOM
+          20 00 00 00                      ; format = 32
+          01 00 00 00                      ; value length = 1 atom
+          00 00 00 00                      ; value    (patched to WM_DELETE_WINDOW atom)
+```
+
+### Handshake code (`0x400c63`)
+
+Reached from the repointed `0x4001d9` jump, after the window is created and
+mapped. It sends each `InternAtom` and reads the 32-byte reply (the atom id is
+at reply offset 8), patches the two atoms into the `ChangeProperty` template,
+sets the window field, sends `ChangeProperty`, and jumps into the startup stub.
+
+```text
+; --- InternAtom("WM_PROTOCOLS") + read reply ---
+400c63: 45 31 d2                  xor  r10d, r10d
+400c66: b8 2c 00 00 00            mov  eax, 0x2c              ; __NR_sendto
+400c6b: 48 89 df                  mov  rdi, rbx
+400c6e: be 1b 0c 40 00            mov  esi, 0x400c1b          ; WM_PROTOCOLS request
+400c73: ba 14 00 00 00            mov  edx, 20
+400c78: 0f 05                     syscall
+400c7a: 41 ba 00 01 00 00         mov  r10d, 0x100            ; MSG_WAITALL
+400c80: b8 2d 00 00 00            mov  eax, 0x2d              ; __NR_recvfrom
+400c85: 48 89 df                  mov  rdi, rbx
+400c88: be 00 52 40 00            mov  esi, 0x405200          ; atom reply buffer
+400c8d: ba 20 00 00 00            mov  edx, 32
+400c92: 0f 05                     syscall
+400c94: 8b 04 25 08 52 40 00      mov  eax, [0x405208]        ; WM_PROTOCOLS atom
+400c9b: 89 04 25 4f 0c 40 00      mov  [0x400c4f], eax        ; -> ChangeProperty.property
+; --- InternAtom("WM_DELETE_WINDOW") + read reply ---
+400ca2: 45 31 d2                  xor  r10d, r10d
+400ca5: b8 2c 00 00 00            mov  eax, 0x2c
+400caa: 48 89 df                  mov  rdi, rbx
+400cad: be 2f 0c 40 00            mov  esi, 0x400c2f          ; WM_DELETE_WINDOW request
+400cb2: ba 18 00 00 00            mov  edx, 24
+400cb7: 0f 05                     syscall
+400cb9: 41 ba 00 01 00 00         mov  r10d, 0x100
+400cbf: b8 2d 00 00 00            mov  eax, 0x2d
+400cc4: 48 89 df                  mov  rdi, rbx
+400cc7: be 00 52 40 00            mov  esi, 0x405200
+400ccc: ba 20 00 00 00            mov  edx, 32
+400cd1: 0f 05                     syscall
+400cd3: 8b 04 25 08 52 40 00      mov  eax, [0x405208]        ; WM_DELETE_WINDOW atom
+400cda: 89 04 25 5f 0c 40 00      mov  [0x400c5f], eax        ; -> ChangeProperty value
+400ce1: 89 04 25 00 53 40 00      mov  [0x405300], eax        ; save for ClientMessage compare
+; --- patch window id and send ChangeProperty ---
+400ce8: 44 89 e0                  mov  eax, r12d
+400ceb: 83 c8 01                  or   eax, 1
+400cee: 89 04 25 4b 0c 40 00      mov  [0x400c4b], eax        ; ChangeProperty.window
+400cf5: 45 31 d2                  xor  r10d, r10d
+400cf8: b8 2c 00 00 00            mov  eax, 0x2c
+400cfd: 48 89 df                  mov  rdi, rbx
+400d00: be 47 0c 40 00            mov  esi, 0x400c47          ; ChangeProperty request
+400d05: ba 1c 00 00 00            mov  edx, 28
+400d0a: 0f 05                     syscall
+400d0c: e9 28 f8 ff ff            jmp  0x400539               ; startup stub -> redraw
+```
+
+### `ClientMessage` close check (`0x400d11`)
+
+Reached from the dispatcher's ignore path. `al` still holds the masked event
+type. A `ClientMessage` (type 33) whose `data.l[0]` equals the saved
+`WM_DELETE_WINDOW` atom means the user pressed the close button, so the app
+exits through the shared `exit_app`. Anything else falls back to the normal
+"ignore and keep waiting" jump.
+
+```text
+400d11: 3c 21                     cmp  al, 0x21               ; ClientMessage?
+400d13: 75 10                     jne  0x400d25               ; no: ignore
+400d15: 8b 04 25 0c 40 40 00      mov  eax, [0x40400c]        ; event data.l[0]
+400d1c: 3b 04 25 00 53 40 00      cmp  eax, [0x405300]        ; == WM_DELETE_WINDOW atom?
+400d23: 74 05                     je   0x400d2a               ; yes: exit
+400d25: e9 8a f7 ff ff            jmp  0x4004b4               ; ignore, back to recvfrom
+400d2a: e9 f7 f7 ff ff            jmp  0x400526               ; exit_app
+```
+
 ## Reused `poc-04` code
 
 Roughly the first 1200 bytes of executable code — entry, the X11 setup
@@ -896,14 +1235,14 @@ instruction is `vaddr − 0x400000`, and the register roles are identical here:
 
 | Region (vaddr) | Behaviour | Byte-by-byte reference | Product delta |
 | --- | --- | --- | --- |
-| `0x000..0x077` | ELF64 header + one `PT_LOAD` | [ELF header and load segment](../../../../../experiments/poc-04-notes-x11/note-edit.md#elf-header-and-load-segment-0x0000x077) | `p_filesz`/`p_memsz` are `0x0a48`/`0x10a48` here (vs `0x092a`/`0x1092a`) because the product appends new code and data |
-| `0x078..0x1d8` | socket/connect, setup handshake, resource-id patching, window bring-up | [Section A](../../../../../experiments/poc-04-notes-x11/note-edit.md#section-a--connect-to-x-and-fetch-setup-reply-0x0780x1d8) | `WM_NAME` string is `"notes-x64"`; the `CreateWindow` event mask is `0x8005` (adds `ButtonPress`); border/background/foreground colours differ — see [Fixed string patches](#fixed-string-patches) |
+| `0x000..0x077` | ELF64 header + one `PT_LOAD` | [ELF header and load segment](../../../../../experiments/poc-04-notes-x11/note-edit.md#elf-header-and-load-segment-0x0000x077) | `p_filesz`/`p_memsz` are `0x0d2f`/`0x10d2f` here (vs `0x092a`/`0x1092a`) because the product appends the session-discovery, atom-handshake, and draw regions |
+| `0x078..0x1d8` | socket/connect, setup handshake, resource-id patching, window bring-up | [Section A](../../../../../experiments/poc-04-notes-x11/note-edit.md#section-a--connect-to-x-and-fetch-setup-reply-0x0780x1d8) | entry `0x78` now jumps to the [session bootstrap](#runtime-session-discovery-0xa48) first; the reply-capture at `0xf5` is repointed to the [root-window patcher](#root-window-from-the-setup-reply-0xbd8); `WM_NAME` string is `"notes-x64"`; the `CreateWindow` event mask is `0x8005` (adds `ButtonPress`); the cookie/socket-path/root-window are patched at runtime, not baked; border/background/foreground colours differ — see [Fixed string patches](#fixed-string-patches) |
 | `0x1de..0x20c` | keycode → ASCII translate + dispatch | [Section B](../../../../../experiments/poc-04-notes-x11/note-edit.md#section-b--key-handler-0x1de0x233) | replaced in place by a `jmp` into the [Shift-aware key handler](#shift-aware-key-handler-0x400963) |
 | `0x20d..0x233` | printable-key append (63-char cap) | [Section B](../../../../../experiments/poc-04-notes-x11/note-edit.md#section-b--key-handler-0x1de0x233) | unchanged; now re-entered from the Shift handler |
 | `0x234..0x250` | backspace | [Section C](../../../../../experiments/poc-04-notes-x11/note-edit.md#section-c--backspace-0x2340x250) | unchanged |
 | `0x251..0x2f8` | save-on-Enter, append `[len+1][text][\n]` | [Section D](../../../../../experiments/poc-04-notes-x11/note-edit.md#section-d--save-current-input-0x2510x2f8) | unchanged |
 | `0x2f9..0x416` | `redraw`: reset count, load, insertion sort | [Section E](../../../../../experiments/poc-04-notes-x11/note-edit.md#section-e--load-and-sort-notes--the-redraw-entry-0x2f90x416) | entry reused as-is; the draw fall-through at `0x417` is repointed to the [two-pane draw routine](#two-pane-draw-routine) |
-| `0x4b4..0x4d6` | `recvfrom` main wait point | [Section G](../../../../../experiments/poc-04-notes-x11/note-edit.md#section-g--event-loop-0x4b40x4f4) | dispatch tail repointed (`0x4d7` → new [event dispatcher](#event-dispatcher)); the old compare chain at `0x4dc..0x4f4` is now dead code |
+| `0x4b4..0x4d6` | `recvfrom` main wait point | [Section G](../../../../../experiments/poc-04-notes-x11/note-edit.md#section-g--event-loop-0x4b40x4f4) | dispatch tail repointed (`0x4d7` → new [event dispatcher](#event-dispatcher)); the dispatcher's ignore path at `0x641` is repointed to the [`ClientMessage` close check](#wm_delete_window-handshake-0xc1b); the old compare chain at `0x4dc..0x4f4` is now dead code |
 | `0x4f5..0x525` | `fill_it8_spaces` / `send_it8` | [Section H](../../../../../experiments/poc-04-notes-x11/note-edit.md#section-h--helper-routines-0x4f50x525) | unchanged; the product patches the `x` field per pane before each call |
 | `0x526..0x537` | `exit_app` (`close` + `exit`) | [Section I](../../../../../experiments/poc-04-notes-x11/note-edit.md#section-i--exit-0x5260x537) | unchanged |
 
@@ -922,15 +1261,28 @@ Shift handlers additionally read these fields, and one new slot is added:
 
 - `0x404018` / `0x40401a` — `ButtonPress` event `x` / `y`, used by the [click handler](#click-handler)
 - `0x40401c` — event state byte; bit 0 (`ShiftMask`) is tested by the [Shift-aware key handler](#shift-aware-key-handler-0x400963)
+- `0x40400c` — `ClientMessage` `data.l[0]`, compared against the saved close atom
 - `0x404804` — selected row index (product addition), initialised to `-1` by the [startup stub](#startup-stub)
+
+The session-discovery code uses three further scratch regions in the BSS slack:
+
+- `0x405000` — buffer the `.Xauthority` file is read into (up to 4 KiB)
+- `0x405200` — 32-byte `InternAtom` reply buffer
+- `0x405300` — saved `WM_DELETE_WINDOW` atom for the close check
+- `0x407000` — scratch buffer for the `HOME + "/.Xauthority"` path
 
 ## Known limitations
 
 This first product reference binary is intentionally still constrained:
 
-- same hard-coded X11 session coupling as `poc-04`
 - keyboard input is still tied to one X11 keycode layout, but now covers normal
   printable ASCII and shifted uppercase/symbols for that layout
+- only single-digit `DISPLAY` values (`:0`..`:9`) patch the socket path; the
+  common local cases are covered, but a two-digit display would need the
+  longer `sockaddr_un` path and addrlen
+- the cookie search takes the first `MIT-MAGIC-COOKIE-1` record in the auth
+  file rather than matching the display number, which is correct for a normal
+  local session
 - same 63-character editor limit
 - same 20-note in-memory display cap
 - `Enter` still appends new records rather than rewriting the file

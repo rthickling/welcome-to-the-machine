@@ -1,18 +1,24 @@
 # `products/notes/targets/wasm/notes-web.wasm`
 
-`notes-web.wasm` is a **379-byte** browser-hosted WebAssembly MVP module for
-the Notes product. Unlike the previous WASI marker, this module exposes an
-actual GUI-oriented host ABI:
+`notes-web.wasm` is a **771-byte** browser-hosted WebAssembly module for the
+Notes product. The module now owns the product behaviour that used to live in
+host glue — the note list, first-word derivation, list rendering, and
+click-to-load hit-testing are all inside the module:
 
 - imported drawing calls render the note and list panes
 - exported `init` paints the initial UI
 - exported `key(code)` edits the in-Wasm input buffer
 - `Enter` calls the imported `save(ptr, len)` host persistence hook
-- exported `click(x, y)` currently repaints the UI
+- exported `load(len)` parses `[u32 length][bytes]` records the host has written
+  into exported memory, builds an in-module index (offset, length, first-word
+  length per note), and renders the list rows
+- exported `click(x, y)` hit-tests the list pane, loads the clicked note back
+  into the editor buffer, and repaints
 
-The browser bootstrap remains external to the repo, per [`web-plan.md`](web-plan.md):
-the committed deliverable is the `.wasm` binary, its binary test, and this
-byte-level documentation.
+Persistence itself stays host-side (browser `localStorage`), per the approved
+web policy in [`web-plan.md`](web-plan.md): the host serialises stored records
+into module memory and calls `load`. The committed deliverable is the `.wasm`
+binary, its binary test, and this byte-level documentation.
 
 ## Custom host checklist
 
@@ -33,11 +39,30 @@ Exports:
 | `memory` | memory | One 64 KiB page. |
 | `init()` | `() -> ()` | Render the initial two-pane UI. |
 | `key(code)` | `(i32) -> ()` | Handle one browser key code / ASCII byte. |
-| `click(x, y)` | `(i32, i32) -> ()` | Host click entry point; currently repaints. |
+| `click(x, y)` | `(i32, i32) -> ()` | Hit-test the list pane; load the clicked note into the editor and repaint. |
+| `load(len)` | `(i32) -> ()` | Parse `len` bytes of records from `0x200`, build the list index, and render. |
 
 The host should pass normal printable ASCII bytes to `key`, including uppercase
 letters and shifted symbols after browser keyboard translation. The module also
 handles `8` as Backspace and `13` as Enter.
+
+### Linear-memory layout
+
+The module fixes these regions in its single 64 KiB page:
+
+| Address | Purpose |
+| --- | --- |
+| `0x000` | `"Note:"` label bytes (data segment 0) |
+| `0x010` | `"Words"` label bytes (data segment 1) |
+| `0x040` | `"Notes Web GUI"` product marker (data segment 2) |
+| `0x100` | editor input buffer (up to 63 bytes; length in global 0) |
+| `0x200` | record staging/storage area — the host writes `[u32 length][bytes]` records here before calling `load` |
+| `0x800` | list index table: 12 bytes per note — `[u32 text offset][u32 text length][u32 first-word length]` |
+
+The host contract for `load`: write the concatenated records starting at
+`0x200`, then call `load(total_byte_count)`. The module parses in place (it
+indexes into the staging area rather than copying), so records must stay below
+the index table at `0x800`.
 
 ## How to run with the included local runner
 
@@ -87,18 +112,18 @@ can provide the same imports without changing the Wasm binary.
 Encoding conventions (LEB128 integers, `0x60` signature markers, `0x7f` =
 `i32`) are introduced in
 [`experiments/poc-05-wasm-wasi/hello.wasm.md`](../../../../experiments/poc-05-wasm-wasi/hello.wasm.md#encoding-conventions-read-this-once).
-Section map of this 379-byte (`0x17b`) file:
+Section map of this 771-byte (`0x303`) file:
 
 ```text
 0x000..0x007  magic "\0asm" + version 1
 0x008..0x01d  Type      (id 0x01, 20-byte payload)
 0x01e..0x063  Import    (id 0x02, 68-byte payload)
-0x064..0x06a  Function  (id 0x03, 5-byte payload)
-0x06b..0x06f  Memory    (id 0x05, 3-byte payload)
-0x070..0x077  Global    (id 0x06, 6-byte payload)
-0x078..0x098  Export    (id 0x07, 31-byte payload)
-0x099..0x150  Code      (id 0x0a, 181-byte payload)
-0x151..0x17a  Data      (id 0x0b, 40-byte payload)
+0x064..0x06b  Function  (id 0x03, 6-byte payload)   ; now 5 functions
+0x06c..0x070  Memory    (id 0x05, 3-byte payload)
+0x071..0x07d  Global    (id 0x06, 11-byte payload)  ; now 2 globals
+0x07e..0x0a5  Export    (id 0x07, 38-byte payload)  ; now 5 exports
+0x0a6..0x2d8  Code      (id 0x0a, 560-byte payload) ; 5 bodies
+0x2d9..0x302  Data      (id 0x0b, 40-byte payload)
 ```
 
 ### Type section (`0x08`)
@@ -128,83 +153,98 @@ Five imports, all functions from module `notes`. Each entry is
 Imported functions take indices 0–4, so `call 0..4` in the code below are the
 host calls, and the module's own functions are indices 5–8.
 
-### Function, memory, and global sections (`0x64`, `0x6b`, `0x70`)
+### Function, memory, and global sections (`0x64`, `0x6c`, `0x71`)
 
 ```text
-03 05 04 00 00 01 02  ; 4 defined functions with type indices 0,0,1,2:
-                      ;   function 5: () -> ()        (render helper)
-                      ;   function 6: () -> ()        (init)
-                      ;   function 7: (i32) -> ()     (key)
-                      ;   function 8: (i32, i32) -> () (click)
-05 03 01 00 01        ; 1 linear memory, limits: min 1 page (64 KiB)
-06 06 01 7f 01 41 00 0b  ; 1 global: i32, mutable, init = (i32.const 0; end)
+03 06 05 00 00 01 02 01  ; 5 defined functions with type indices 0,0,1,2,1:
+                         ;   function 5: () -> ()         (render helper)
+                         ;   function 6: () -> ()         (init)
+                         ;   function 7: (i32) -> ()      (key)
+                         ;   function 8: (i32, i32) -> () (click)
+                         ;   function 9: (i32) -> ()      (load)
+05 03 01 00 01           ; 1 linear memory, limits: min 1 page (64 KiB)
+06 0b 02                 ; global section, payload 11, 2 globals
+   7f 01 41 00 0b        ;   global 0: i32, mutable, init (i32.const 0)
+   7f 01 41 00 0b        ;   global 1: i32, mutable, init (i32.const 0)
 ```
 
-Global 0 is the **current input length** — the only piece of mutable state
-outside linear memory.
+Global 0 is the **current input length**; global 1 is the **note count** —
+the two pieces of mutable state outside linear memory.
 
-### Export section (`0x78`)
+### Export section (`0x7e`)
 
 ```text
-07 1f 04                    ; id, payload length 31, 4 exports
+07 26 05                    ; id, payload length 38, 5 exports
 06 6d656d6f7279 02 00       ; "memory" kind 2 (memory), index 0
 04 696e6974     00 06       ; "init"   kind 0 (function), index 6
 03 6b6579       00 07       ; "key"    function 7
 05 636c69636b   00 08       ; "click"  function 8
+04 6c6f6164     00 09       ; "load"   function 9
 ```
 
-## Code section (`0x99`), instruction by instruction
+## Code section (`0xa6`), instruction by instruction
 
 ```text
-0a b5 01 04    ; id 0x0a, payload length 181 (LEB128 b5 01), 4 bodies
+0a b0 04 05    ; id 0x0a, payload length 560 (LEB128 b0 04), 5 bodies
 ```
 
-### Function 5 — render helper (body at `0x9d`, 72 bytes)
+Body sizes: function 5 = 137, function 6 = 4, function 7 = 97, function 8 = 139,
+function 9 = 174 bytes (each preceded by its own LEB128 size prefix).
+
+### Function 5 — render helper (`89 01` = 137 bytes)
 
 Wasm is a stack machine: `i32.const` pushes an argument, `call` pops the
-callee's arguments. Every coordinate below is a pixel.
+callee's arguments. This body draws the static panes, the editor text, and the
+`Words` label, then loops over the in-module note index drawing one first-word
+row per note.
 
 ```text
-48 00                 ; body size 72, no locals
+89 01                 ; body size 137
+01 01 7f              ; 1 local group: 1 × i32 (local 0 = loop counter i)
 10 00                 call 0                   ; clear()
-41 a0 c0 80 01        i32.const 0x202020       ; background (LEB128, 4 bytes)
+41 a0 c0 80 01        i32.const 0x202020       ; background
 41 e0 c1 83 07        i32.const 0xe0e0e0       ; foreground
-10 01                 call 1                   ; style(0x202020, 0xe0e0e0)
-41 08 41 14           i32.const 8, 20
-41 ca 02 41 34        i32.const 330, 52
-10 02                 call 2                   ; rect(8, 20, 330, 52)    left pane
-41 de 02 41 14        i32.const 350, 20
-41 ee 01 41 de 02     i32.const 238, 350
-10 02                 call 2                   ; rect(350, 20, 238, 350) right pane
-41 10 41 1e           i32.const 16, 30
-41 00 41 05           i32.const 0, 5
-10 03                 call 3                   ; text(16, 30, ptr 0, len 5)   "Note:"
-41 10 41 2e           i32.const 16, 46
-41 80 02              i32.const 256            ; input buffer address
-23 00                 global.get 0             ; current input length
-10 03                 call 3                   ; text(16, 46, 256, len)  the live input
-41 e8 02 41 1e        i32.const 360, 30
-41 10 41 05           i32.const 16, 5
-10 03                 call 3                   ; text(360, 30, ptr 16, len 5) "Words"
-0b                    end
+10 01                 call 1                   ; style(...)
+41 08 41 14 41 ca 02 41 34 10 02   ; rect(8, 20, 330, 52)   left pane
+41 de 02 41 14 41 ee 01 41 de 02 10 02  ; rect(350, 20, 238, 350) right pane
+41 10 41 1e 41 00 41 05 10 03      ; text(16, 30, 0, 5)     "Note:"
+41 10 41 2e 41 80 02 23 00 10 03   ; text(16, 46, 256, global0)  live editor
+41 e8 02 41 1e 41 10 41 05 10 03   ; text(360, 30, 16, 5)   "Words"
+; --- list loop over notes ---
+41 00 21 00           i32.const 0; local.set 0   ; i = 0
+02 40                 block
+03 40                 loop
+  20 00 23 01 4e 0d 01     local.get 0; global.get 1; i32.ge_s; br_if 1  ; i >= count → break
+  41 e8 02                 i32.const 360                                 ; x
+  20 00 41 10 6c 41 30 6a  local.get 0; i32.const 16; i32.mul; i32.const 48; i32.add  ; y = 48 + i*16
+  41 80 10 20 00 41 0c 6c 6a 28 02 00   ; i32.load [0x800 + i*12]       ; note text offset
+  41 80 10 20 00 41 0c 6c 6a 28 02 08   ; i32.load offset=8 [0x800+i*12] ; first-word length
+  10 03                   call 3                                        ; text(360, y, off, fwlen)
+  20 00 41 01 6a 21 00    local.get 0; i32.const 1; i32.add; local.set 0 ; i++
+  0c 00                   br 0
+0b                    end                        ; loop
+0b                    end                        ; block
+0b                    end                        ; function
 ```
 
-### Function 6 — exported `init` (body at `0xe6`, 4 bytes)
+### Function 6 — exported `init` (`04` = 4 bytes)
 
 ```text
-04 00                 ; body size 4, no locals
+04                    ; body size 4
+00                    ; no locals
 10 05                 call 5                   ; render
 0b                    end
 ```
 
-### Function 7 — exported `key(code)` (body at `0xeb`, 96 bytes)
+### Function 7 — exported `key(code)` (`61` = 97 bytes)
 
 One `if/else` chain on the key code (`local 0`), then an unconditional
 repaint. `04 40` is `if` with empty block type; an empty *then* branch
 followed immediately by `05` (`else`) is how "do nothing unless" is encoded.
 
 ```text
-60 00                 ; body size 96, no locals
+61                    ; body size 97
+00                    ; no locals
 ; --- Backspace: code == 8 ---
 20 00 41 08 46        local.get 0; i32.const 8; i32.eq
 04 40                 if
@@ -230,7 +270,7 @@ followed immediately by `05` (`else`) is how "do nothing unless" is encoded.
     ; --- printable character path ---
     20 00 41 1f 4b    local.get 0; i32.const 31; i32.gt_u   ; code > 31 ?
     04 40             if
-      20 00 41 7f 49  local.get 0; i32.const -1; i32.lt_u   ; code <_u 0xFFFFFFFF ?
+      20 00 41 ff 00 49  local.get 0; i32.const 127; i32.lt_u  ; code <_u 127 ?
       04 40           if
         23 00 41 3f 49  global.get 0; i32.const 63; i32.lt_u ; length < 63 ?
         04 40           if
@@ -249,27 +289,101 @@ followed immediately by `05` (`else`) is how "do nothing unless" is encoded.
 0b                    end
 ```
 
-**Encoding quirk, documented deliberately:** the upper-bound test uses
-`41 7f`, and in *signed* LEB128 the single byte `0x7f` decodes to **−1**, not
-127. So the test is `code <_u 0xFFFFFFFF` — true for every code except
-`0xFFFFFFFF` — and the module actually accepts *any* code above 31 that a
-host passes, not just ASCII `[32, 126]`. Encoding 127 would need the
-two-byte LEB `ff 00`. With well-behaved hosts (the included runner only
-forwards single printable characters plus 8/13) the observable behaviour is
-the printable-ASCII contract described above.
+**Quirk fix:** the previous build's upper-bound test used `41 7f`, which in
+*signed* LEB128 decodes to **−1**, so the check `code <_u 0xFFFFFFFF` accepted
+every code above 31. This build encodes 127 correctly as the two-byte LEB
+`ff 00`, so the printable path now runs only for `31 < code < 127` — exactly
+the printable-ASCII range `[32, 126]`.
 
-### Function 8 — exported `click(x, y)` (body at `0x14c`, 4 bytes)
+### Function 8 — exported `click(x, y)` (`8b 01` = 139 bytes)
+
+The parameters are `local 0 = x`, `local 1 = y`; three extra locals hold the
+hit-test row, a copy index, and the note length. If the click lands on a list
+row the module copies that note's full text into the editor buffer at `0x100`
+and sets the editor length (global 0). The `block` acts as an early-exit guard:
+any failed bound check `br_if 0` jumps to the final `render`.
 
 ```text
-04 00                 ; body size 4, no locals
-10 05                 call 5                   ; render (repaint only; both args ignored)
+8b 01                 ; body size 139
+01 03 7f              ; 3 × i32 locals (2 = row, 3 = copy index j, 4 = note length)
+02 40                 block
+  20 00 41 de 02 48 0d 00   local.get 0; i32.const 350; i32.lt_s; br_if 0  ; x < 350 → skip
+  20 00 41 cc 04 4e 0d 00   local.get 0; i32.const 588; i32.ge_s; br_if 0  ; x >= 588 → skip
+  20 01 41 30 48 0d 00      local.get 1; i32.const 48;  i32.lt_s; br_if 0  ; y < 48 → skip
+  20 01 41 30 6b 41 10 6d 21 02   local.get 1; i32.const 48; i32.sub; i32.const 16; i32.div_s; local.set 2  ; row = (y-48)/16
+  20 02 41 00 48 0d 00      local.get 2; i32.const 0; i32.lt_s; br_if 0    ; row < 0 → skip
+  20 02 23 01 4e 0d 00      local.get 2; global.get 1; i32.ge_s; br_if 0   ; row >= count → skip
+  41 80 10 20 02 41 0c 6c 6a 28 02 04   i32.load offset=4 [0x800 + row*12] ; note length
+  21 04                     local.set 4
+  20 04 41 3f 4a            local.get 4; i32.const 63; i32.gt_s
+  04 40 41 3f 21 04 0b      if (len > 63) { len = 63 }                     ; clamp to buffer
+  41 00 21 03               i32.const 0; local.set 3                       ; j = 0
+  02 40                     block
+  03 40                     loop
+    20 03 20 04 4e 0d 01    local.get 3; local.get 4; i32.ge_s; br_if 1    ; j >= len → done
+    41 80 02 20 03 6a       i32.const 256; local.get 3; i32.add            ; dst = 0x100 + j
+    41 80 10 20 02 41 0c 6c 6a 28 02 00   i32.load [0x800 + row*12]        ; src note offset
+    20 03 6a 2d 00 00       local.get 3; i32.add; i32.load8_u             ; src byte
+    3a 00 00               i32.store8                                     ; editor[j] = byte
+    20 03 41 01 6a 21 03    local.get 3; i32.const 1; i32.add; local.set 3 ; j++
+    0c 00                  br 0
+  0b                       end                     ; loop
+  0b                       end                     ; block
+  20 04 24 00              local.get 4; global.set 0   ; editor length = note length
+0b                    end                        ; guard block
+10 05                 call 5                     ; render
 0b                    end
 ```
 
-Neither parameter is read — click-to-load behaviour lives in the host runner,
-which reads the saved records itself.
+### Function 9 — exported `load(len)` (`ae 01` = 174 bytes)
 
-## Data section (`0x151`)
+Parses the staging area at `0x200`. `local 0 = len` (total bytes the host
+wrote); locals 1–4 are `pos`, `count`, `recLen`, and the first-word scan index
+`fw`. For each `[u32 length][bytes]` record it writes a 12-byte index entry at
+`0x800 + count*12` (`[offset][length][first-word length]`), where first-word
+length is the byte count up to the first space (`0x20`) or the record end.
+
+```text
+ae 01                 ; body size 174
+01 04 7f              ; 4 × i32 locals (1 = pos, 2 = count, 3 = recLen, 4 = fw)
+41 00 21 01           i32.const 0; local.set 1     ; pos = 0
+41 00 21 02           i32.const 0; local.set 2     ; count = 0
+02 40                 block
+03 40                 loop
+  20 01 41 04 6a 20 00 4a 0d 01   local.get 1; i32.const 4; i32.add; local.get 0; i32.gt_s; br_if 1  ; pos+4 > len → stop
+  41 80 04 20 01 6a 28 02 00 21 03   i32.load [0x200 + pos]; local.set 3   ; recLen
+  20 01 41 04 6a 21 01            local.get 1; i32.const 4; i32.add; local.set 1  ; pos += 4
+  20 03 41 00 4c 0d 01            local.get 3; i32.const 0; i32.le_s; br_if 1     ; recLen <= 0 → stop
+  20 01 20 03 6a 20 00 4a 0d 01   local.get 1; local.get 3; i32.add; local.get 0; i32.gt_s; br_if 1  ; pos+recLen > len → stop
+  ; index[count].offset = 0x200 + pos
+  41 80 10 20 02 41 0c 6c 6a      i32.const 0x800; local.get 2; i32.const 12; i32.mul; i32.add  ; entry addr
+  41 80 04 20 01 6a               i32.const 0x200; local.get 1; i32.add                          ; text offset
+  36 02 00                        i32.store
+  ; index[count].length = recLen
+  41 80 10 20 02 41 0c 6c 6a 20 03 36 02 04   i32.store offset=4  ; entry+4 = recLen
+  ; first-word scan
+  41 00 21 04           i32.const 0; local.set 4    ; fw = 0
+  02 40                 block
+  03 40                 loop
+    20 04 20 03 4e 0d 01           local.get 4; local.get 3; i32.ge_s; br_if 1   ; fw >= recLen → stop
+    41 80 04 20 01 6a 20 04 6a 2d 00 00   i32.load8_u [0x200 + pos + fw]         ; byte
+    41 20 46 0d 01                 i32.const 32; i32.eq; br_if 1                 ; space → stop
+    20 04 41 01 6a 21 04           local.get 4; i32.const 1; i32.add; local.set 4 ; fw++
+    0c 00                          br 0
+  0b                    end        ; loop
+  0b                    end        ; block
+  41 80 10 20 02 41 0c 6c 6a 20 04 36 02 08   i32.store offset=8  ; entry+8 = fw
+  20 01 20 03 6a 21 01            local.get 1; local.get 3; i32.add; local.set 1  ; pos += recLen
+  20 02 41 01 6a 21 02            local.get 2; i32.const 1; i32.add; local.set 2  ; count++
+  0c 00                 br 0
+0b                    end          ; loop
+0b                    end          ; block
+20 02 24 01           local.get 2; global.set 1     ; note count = count
+10 05                 call 5                          ; render
+0b                    end
+```
+
+## Data section (`0x2d9`)
 
 Three active segments; each is `memory index 0, offset expression
 (i32.const N; end), byte count, bytes`:
@@ -295,7 +409,9 @@ is guaranteed zero-initialised, so the buffer starts empty.
 
 - Wasm magic bytes
 - `notes.clear` import anchor
+- Function section (5 functions, type indices `0,0,1,2,1`)
 - `init` / `key` export anchor
+- `load` export anchor (the persistence entry point)
 - `Note:` data bytes
 - `Words` data bytes
 - `Notes Web GUI` product bytes

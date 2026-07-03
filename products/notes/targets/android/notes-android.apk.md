@@ -150,6 +150,53 @@ bottom `ENTER` button, keeps the right-pane rows sorted, supports tap-to-edit
 for saved rows, deletes right-pane rows with their `DEL` buttons, and reloads
 saved rows after app restart.
 
+## Emulator audit vs the product contract
+
+Audited on the `poc10-api35-x86_64` AVD (API 35, 1080×2340). Against the
+[product contract](../../contract.md) the app conforms on every **user-visible**
+behavior:
+
+| Contract behavior | Result |
+| ----------------- | ------ |
+| Left editor (note) pane + right list pane, bordered, readable colours | pass |
+| List sorted by first word (ascending byte order) | pass — `APPLE`, `BANANA`, `MANGO`, `PEAR` sorted after out-of-order entry |
+| First-word rule | pass — `BANANA SPLIT HERE` renders as `BANANA`; space-free notes render whole |
+| `Enter` stores editor contents as a note | pass — hardware/`ENTER` key both save |
+| Click/tap a row loads full note into editor | pass — tapping `BANANA` loaded `BANANA SPLIT HERE` and highlighted the row |
+| Edit-then-`Enter` replaces the tapped row and re-sorts | pass |
+| Delete a row via its `DEL` button | pass — deleting `MANGO` dropped the row and kept the rest sorted |
+| Printable ASCII incl. uppercase | pass |
+| Persistence across restart | pass — rows reloaded after `force-stop` + relaunch |
+| Launch without ANR / touch timeout | pass |
+
+**One deviation — the on-disk storage format.** The app persists to
+`files/notes.bin` in a custom container: the ASCII magic `NDB1`, a one-byte
+record count, then per-record `[u8 length][bytes]`:
+
+```text
+4e 44 42 31            "NDB1" magic
+03                     record count
+05 41 50 50 4c 45      len 5, "APPLE"
+11 42 41 4e ...        len 17, "BANANA SPLIT HERE"
+04 50 45 41 52         len 4, "PEAR"
+```
+
+The [contract's shared storage format](../../contract.md#shared-storage-format)
+is a header-less sequence of `[u32 little-endian length][bytes]` records in
+`notes.db`, which the Linux x86_64/ARM64 and Windows builds all read and write.
+Android's `NDB1`/`u8`-framed `notes.bin` is therefore **not** interchangeable
+with the other targets' `notes.db`, which breaks the contract's portability
+goal.
+
+This deviation was left in place rather than fixed: the record (de)serialization
+is woven through the hand-authored native code paths (load-on-create,
+`ENT`-save, edit-replace, `DEL`) in **both** the `x86_64` and `arm64-v8a`
+`libhello.so`, and rewriting it as machine code inside a signed APK is
+disproportionately risky for a polish pass with no user-visible payoff — the
+rendered product behavior above is unaffected. It is recorded here as the sole
+known contract gap for this target; aligning the framing (and filename) to the
+shared `notes.db` is a candidate for a dedicated follow-up.
+
 ## Verification
 
 `test-notes-android` checks the APK ZIP signature, both ABI library filenames,
