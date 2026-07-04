@@ -184,8 +184,9 @@ All five scenarios were verified manually after the build — see
 - **Binary-only** (rule 1): no source file of any kind is checked in for
   this binary. `test-note-code.hex` is a throwaway shell heredoc, not a
   source artefact.
-- **Documented** (rule 2): this file.
-- **It is itself a test** (rule 3): yes, a test for `poc-03/note`.
-- **Library interfaces** (rule 6): none. Only direct Linux syscalls
-  `open(2)`, `read(2)`, and `exit(2)` are used; the ABI is the standard
+- **Documented** (rule 3): this file.
+- **It is itself a test** (rule 4): yes, a test for `poc-03/note`.
+- **Library interfaces** (rule 7): none used. Linking existing libraries is
+  allowed by the rules, but this binary needs none — only direct Linux
+  syscalls `open(2)`, `read(2)`, and `exit(2)`; the ABI is the standard
   x86_64 syscall convention.

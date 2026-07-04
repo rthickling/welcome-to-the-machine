@@ -4,9 +4,13 @@
 raw-X11 port of the Linux x86_64 flagship
 ([`notes-linux-x86_64.md`](../x86_64/notes-linux-x86_64.md)). It is a genuine
 two-pane Notes GUI hand-authored as fixed-width 32-bit AArch64 instruction words
-— no assembler, no libc, no Xlib — that talks the X11 wire protocol directly
-over a Unix-domain socket. It runs under `qemu-aarch64-static`, which passes the
-X socket syscalls through to the host X server.
+that talks the X11 wire protocol directly over a Unix-domain socket. Like the
+x86_64 flagship it is built fully freestanding (no libc, no Xlib) — a design
+choice, since going through Xlib would mean hand-authoring dynamic-linking ELF
+structures on top of the same amount of protocol logic; the
+[repo rules](../../../../../docs/rules.md) themselves permit linking existing
+libraries. It runs under `qemu-aarch64-static`, which passes the X socket
+syscalls through to the host X server.
 
 Terminology for [BSS](../../../glossary.md#bss), syscalls, and the X11 handshake:
 [product notes glossary](../../../glossary.md).
@@ -37,8 +41,9 @@ to reserve BSS scratch above the file image.
 ```text
 0x000..0x03f     64   ELF64 header (e_machine patched to 0xb7 = EM_AARCH64)
 0x040..0x077     56   single PT_LOAD program header (R|W|X, memsz 0x40000)
-0x078..0x083c    ~    AArch64 code (entry branch + helpers + _start)
-0x0840..0x0fff        zero padding
+0x078..0x0863    ~    AArch64 code (entry branch + helpers + _start)
+0x0864..0x087f   28   draw-epilogue stub: final border re-send + `ldp`/`ret`
+0x0880..0x0fff        zero padding
 0x1000..0x125f        data: X11 request templates, UI strings, env strings, keymap
 0x1260..            (in memory) BSS scratch: reply, events, editor, slots, auth
 ```
@@ -94,7 +99,7 @@ Code offsets below are given relative to the entry point `0x400078`
 list row goes through the one `ImageText8` template at `0x4010b4`, patching the
 16-bit `x`/`y` and the 64-byte string payload in place before writing.
 
-### `draw` (`0x07c..0x13b`)
+### `draw` (`0x07c..0x13b` + epilogue stub at `0x7ec`)
 
 Redraws the whole UI. It sends the `PolyRectangle` request (the two pane
 borders), then calls `drawstr` for `Note:` (16,30), the current editor text
@@ -102,6 +107,26 @@ borders), then calls `drawstr` for `Note:` (16,30), the current editor text
 text is the note's first word (scan to the first space). The note count is read
 from the global at `0x413044` and each row's text from its slot at
 `0x413100 + i*128`.
+
+Because each `drawstr` paints an opaque 64-character `ImageText8` (384 px of
+background fill from the row's `x`), the rows would erase 13-px stripes of any
+border line they cross — the right pane's right edge at `x = 588` sits mid-row
+and used to degrade into a dotted column. The epilogue therefore re-sends the
+borders **after** all the text: the original `ldp x29,x30,[sp],#16` at `0x138`
+is replaced by `b #0x6b4` into a 7-instruction stub at `0x7ec`:
+
+```text
+0x7ec  add x1, x23, #260      ; PolyRectangle template at 0x401104
+0x7f0  mov x2, #28
+0x7f4  mov x0, x19            ; X socket
+0x7f8  mov x8, #64            ; write
+0x7fc  svc #0                 ; re-send borders on top of the rows
+0x800  ldp x29, x30, [sp], #16  ; original epilogue
+0x804  ret
+```
+
+The border is sent twice per redraw (once up front, once here); the final send
+is what stays visible, so the pane outlines render as solid X lines.
 
 ### `load_db` (`0x13c..0x217`)
 

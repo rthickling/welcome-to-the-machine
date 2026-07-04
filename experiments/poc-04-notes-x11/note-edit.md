@@ -5,14 +5,23 @@ real X11 window titled `"note-edit"`, accepts keyboard input directly via raw
 X11 `KeyPress` events, appends the entered text to `notes.db` on Enter, and
 re-renders the whole note list in **sorted order** on every redraw.
 
-It stays within the repo rules:
+It stays within the [repo rules](../../docs/rules.md): it is a hand-authored
+binary (no source language of any kind), with a matching binary test and this
+byte-level Markdown companion.
 
-- binary only
+Beyond that, it is built **fully freestanding** — an implementation choice,
+not a rule. The rules explicitly allow linking against machine code that
+already exists (libc, Xlib, system DLLs, ...); this binary simply doesn't use
+that allowance:
+
 - no `libc`
 - no Xlib / libxcb linkage
 - direct Linux syscalls
 - raw X11 wire protocol
-- matching binary test and Markdown companion
+
+Going freestanding here is the *simpler* path for hand-authored machine code:
+a dynamically linked ELF needs `PT_INTERP`, `.dynamic`, relocation and PLT/GOT
+structures, all of which would have to be hand-hexed too.
 
 **Terminology:** names like [`ImageText8`](../../products/notes/glossary.md#imagetext8),
 [raw X11](../../products/notes/glossary.md#raw-x11), [BSS](../../products/notes/glossary.md#bss),

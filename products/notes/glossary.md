@@ -40,6 +40,11 @@ payload** copied into the same request template (a 64-byte string region in the
 directly (socket, `send`/`sendto`/`recvfrom`), without Xlib, xcb, or a toolkit.
 Resource IDs, event masks, and request layouts are **baked into** the
 reference binary, as in [`poc-04`](../../experiments/poc-04-notes-x11/note-edit.md).
+This is an implementation choice, not a repo-rule requirement: the
+[repo rules](../../docs/rules.md) allow linking against machine code that
+already exists (libc, Xlib, system DLLs). Speaking the wire protocol directly
+just avoids hand-authoring the dynamic-linking ELF structures that using Xlib
+would require.
 
 ## BSS
 

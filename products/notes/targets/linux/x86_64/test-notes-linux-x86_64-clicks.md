@@ -28,8 +28,12 @@ It validates nine machine-code or literal ranges in `notes-linux-x86_64`:
    - draw loop tail jumps into the stale-row clear helper
 6. `0x686` — `89 2c 25 04 48 40 00 89 e8 c1 e0 06 05 00 43 40 00`
    - normal click path still stores the selected row and computes the slot base
-7. `0x6ca` — `83 fd 14 7d 1d e8 21 fe ff ff 66 c7 04 25 e0 07 40 00 68 01 e8 22 fe ff ff 66 41 83 c6 10 ff c5 eb de e9 c3 fd ff ff`
+7. `0x6ca` — `83 fd 14 7d 1d e8 21 fe ff ff 66 c7 04 25 e0 07 40 00 68 01 e8 22 fe ff ff 66 41 83 c6 10 ff c5 eb de e9 00 00 00 00`
    - tail-clear helper body for blanking unused right-pane rows after deletions
+   - the trailing `e9 00 00 00 00` pins the exit jump into the final
+     border re-draw stub at `0x6f1` (which repaints the `PolyRectangle`
+     borders over the rows' opaque text backgrounds before returning to the
+     receive loop)
 8. `0x878` — `44 65 6c`
    - `Del` label literal
 9. `0x893` — `b8 02 00 00 00 bf c8 07 40 00 ... e9 3b fc ff ff`
@@ -43,7 +47,8 @@ the row-walk start immediate is `0x1e` so row index `0` is aligned to `y=30`;
 intact; (4) the post-delete path still jumps to the on-disk helper at `0x400893`;
 (5) the draw loop’s exit still jumps into the tail-clear subsequence; (6) the
 load path still records `0x404804` and forms `0x404300+row*64`; (7) the tail-clear
-helper’s compare/call/loop form is still present; (8) the visible `Del` literal
+helper’s compare/call/loop form is still present and its exit still routes
+through the border re-draw stub; (8) the visible `Del` literal
 is still embedded; (9) the `open`/`write` loop that rewrites the database is
 unchanged, so a regression in persistence is caught even when the UI still
 starts.

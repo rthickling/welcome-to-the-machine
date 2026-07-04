@@ -322,7 +322,7 @@ section.
 | `0x549..0x61f` | two-pane draw routine |
 | `0x620..0x645` | event dispatcher |
 | `0x646..0x6c9` | row draw helper plus click hit-testing / row action logic |
-| `0x6ca..0x6e6` | tail clear helper for unused right-pane rows |
+| `0x6ca..0x6fa` | tail clear helper for unused right-pane rows + final border re-draw stub |
 | `0x893..0x90d` | persistent delete rewrite helper |
 | `0x92a..0x962` | border draw helper |
 | `0x963..0x9ab` | Shift-aware key handler |
@@ -828,9 +828,11 @@ entry point branches there.
 rows but the screen can still show up to 20 rows. It `cmp`s `ebp` to `0x14`
 (20) and, while below, `call`s `fill_it8` and `send_it8` to paint another blank
 right-pane line at the same `x` and advancing `r14` by 16, incrementing a row
-counter in `ebp`. When `ebp` reaches 20, it jumps back to the main X11 receive
-loop. The net effect is to erase any stale rows that would otherwise remain
-visible after deletes.
+counter in `ebp`. When `ebp` reaches 20, it jumps into the final border
+re-draw stub at `0x4006f1` (which re-sends the `PolyRectangle` borders and then
+returns to the main X11 receive loop). The net effect is to erase any stale
+rows that would otherwise remain visible after deletes, and to leave the pane
+borders painted on top of every row's opaque text background.
 
 **Disassembly (`0x4006ca`–`0x4006f0`):**
 
@@ -850,9 +852,27 @@ visible after deletes.
 4006e3: 66 41 83 c6 10                add     r14w, 0x10             ; same 16px vertical pitch
 4006e8: ff c5                         inc     ebp
 4006ea: eb de                         jmp     0x4006ca
-4006ec: e9 c3 fd ff ff                jmp     0x4004b4                ; done: wait for next X event
-        ; 0x4006f1..0x4006ff: in-image padding or non-entry bytes after the jmp
+4006ec: e9 00 00 00 00                jmp     0x4006f1               ; done: fall into border re-draw stub
+4006f1: e8 34 02 00 00                call    0x40092a               ; re-send PolyRectangle borders
+4006f6: e9 b9 fd ff ff                jmp     0x4004b4               ; then wait for next X event
+        ; 0x4006fb..0x4006ff: in-image padding after the stub
 ```
+
+### Final border re-draw stub (`0x4006f1`)
+
+Every text line is an opaque 64-character `ImageText8`: its background fill
+extends 384 px from the row's `x` and would otherwise erase 13-px stripes of
+any border line it crosses (most visibly the right pane's right edge at
+`x = 588`, which sits mid-row and used to degrade into a dotted column of
+slivers). Because every full redraw funnels through the tail-clear exit, the
+stub re-issues the same 28-byte `PolyRectangle` request via the
+[border helper](#border-draw-helper-0x40092a) **after** all rows are painted,
+so the border lines always end up on top and render solid. The border is thus
+sent twice per redraw — once by the original `call` at `0x549` (kept, since
+verifier anchors and the helper's trailing `fill_it8` contract depend on it)
+and once here; the second send is what the user sees. The `jmp 0x4006f1` with
+displacement `0` exists (rather than falling through) so the stub bytes stay
+in the padding region without disturbing the anchored tail-clear body.
 
 ### Persistent delete helper
 
