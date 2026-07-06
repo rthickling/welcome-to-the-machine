@@ -44,7 +44,7 @@ Host setup and runtime notes are in [`docs/prerequisites.md`](docs/prerequisites
 
 | Product | Status | Docs |
 | --- | --- | --- |
-| `notes` | First cross-platform product. Linux x86_64 (session-independent reference build) and a full hand-authored Linux ARM64 raw-X11 port are runnable GUIs; Windows x86_64 is a runnable two-pane Win32 GUI with `notes.db` persistence; the WebAssembly module owns its note list in-module; the Android APK is an emulator-audited NativeActivity GUI; remaining targets are scaffold/container artifacts with structural verifiers. | [`products/notes/README.md`](products/notes/README.md) |
+| `notes` | First cross-platform product. Linux x86_64 (session-independent raw-X11 reference build) and a full hand-authored Linux ARM64 raw-X11 port are runnable GUIs; a hand-authored **dynamically-linked GTK 3** Linux x86_64 build adds a richer native UI (editor, scrollable list, Save button); Windows x86_64 is a runnable two-pane Win32 GUI with `notes.db` persistence; the WebAssembly module owns its note list in-module; the Android APK is an emulator-audited NativeActivity GUI; remaining targets are scaffold/container artifacts with structural verifiers. | [`products/notes/README.md`](products/notes/README.md) |
 
 ## Experiments
 
