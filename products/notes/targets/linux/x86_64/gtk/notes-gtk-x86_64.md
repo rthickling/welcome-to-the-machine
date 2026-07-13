@@ -1,6 +1,6 @@
 # `products/notes/targets/linux/x86_64/gtk/notes-gtk-x86_64`
 
-A **2751-byte** hand-authored Linux ELF64 x86_64 **dynamically-linked** GUI
+A **3819-byte** hand-authored Linux ELF64 x86_64 **dynamically-linked** GUI
 executable. Unlike the flagship `../notes-linux-x86_64` (which speaks the raw
 X11 wire protocol from freestanding machine code), this build **dynamically
 links GTK 3** and drives real native widgets: a titled top-level window, a
@@ -20,14 +20,19 @@ Terminology: [product notes glossary](../../../glossary.md).
 ## What it does
 
 - Loads its widget tree from `notes-gtk.ui` via `GtkBuilder`.
-- On startup, reads `notes.db` from the current directory and inserts one list
-  row per note (the row label is the note's **first word**, matching the
-  product contract).
+- On startup, resolves `notes-gtk.ui` and `notes.db` beside the executable
+  (via `readlink("/proc/self/exe", …)`), then reads `notes.db` and inserts one list
+  row per note in **alphabetical order by first word** (the row label is the note's
+  **first word**, matching the product contract).
 - **Click a list row** → the full note text is loaded into the editor pane
   (`row-activated` → `gtk_text_buffer_set_text`).
 - **Click `Save note`** → the editor's text is appended to `notes.db` as a new
-  fixed-format record and a new row is added to the list live
-  (`clicked` → append + `gtk_list_box_insert` + `gtk_widget_show`).
+  fixed-format record and a new row is inserted into the list at the sorted
+  position live (`clicked` → append + `note_sorted_insert`).
+- **Click `Delete note`** → deletes the last list row you activated (tracked in
+  `g_sel_row`), compacts the in-memory note tables, calls `gtk_widget_destroy`
+  on that row, rewrites `notes.db` from memory (`rewrite_db`), and clears the
+  editor (`delbtn` `clicked` → `cb_delete`).
 - **Close the window** → `destroy` → `gtk_main_quit`, clean exit.
 
 On-disk format is the repo's existing record layout, so `notes.db` is shared
@@ -59,6 +64,7 @@ The ELF requests interpreter `/lib64/ld-linux-x86-64.so.2` and declares two
 | 12 | `0x4006b8` | `g_signal_connect_data` | gobject-2.0 | `(instance, signal, GCallback, data, destroy, flags)` |
 | 13 | `0x4006c0` | `gtk_main` | gtk-3 | `(void)` |
 | 14 | `0x4006c8` | `gtk_main_quit` | gtk-3 | `(void)` |
+| 15 | `0x4006d8` | `gtk_widget_destroy` | gtk-3 | `(GtkWidget*)` |
 
 `g_signal_connect` is a macro; the real exported symbol is
 `g_signal_connect_data`, called with `data=NULL`, `destroy_data=NULL`,
@@ -67,11 +73,11 @@ The ELF requests interpreter `/lib64/ld-linux-x86-64.so.2` and declares two
 ## File / memory layout
 
 The single `PT_LOAD` maps the whole file `R+W+X` at `0x400000`; `p_memsz` is
-`0x40000` so everything from `p_filesz` (`0xabf`) up to `0x440000` is
+`0x40000` so everything from `p_filesz` (`0xeeb`) up to `0x440000` is
 zero-filled BSS used for globals and buffers.
 
 ```text
-0x000..0x040   ELF64 header (entry = 0x400720)
+0x000..0x040   ELF64 header (entry = 0x40076b)
 0x040..0x0e8   3 program headers: PT_LOAD, PT_INTERP, PT_DYNAMIC
 0x0e8..0x104   .interp  "/lib64/ld-linux-x86-64.so.2\0"
 0x108..0x158   .hash    (minimal: nbucket=1, nchain=16)
@@ -79,38 +85,55 @@ zero-filled BSS used for globals and buffers.
 0x2d8..0x429   .dynstr  (symbol + library name strings)
 0x430..0x598   .rela.dyn (15 × R_X86_64_GLOB_DAT, 24 bytes each)
 0x598..0x658   .dynamic (12 entries)
-0x658..0x6d0   .got     (15 × 8-byte slots, filled by the loader)
-0x6d0..0x720   rodata   (UI path, widget ids, signal names, "notes.db")
-0x720..0x83b   entry / main
-0x83b..0x91f   load_notes
-0x91f..0xa90   cb_save   (Save-note handler)
-0xa90..0xabf   cb_row    (row-activated handler)
+0x658..0x6d0   .got     (slots 0–14, filled by the loader)
+0x6d0..0x6d7   rodata   ("delbtn")
+0x6d8..0x6e0   .got     (slot 15: gtk_widget_destroy)
+0x6e0..0x6ef   rodata   ("/proc/self/exe")
+0x71b..0x767   rodata   (fallback UI/DB basenames, widget ids, signal names)
+0x76b..0x8c5   entry / main
+0x8c6..0x9b1   load_notes
+0x9b2..0xb25   cb_save   (Save-note handler)
+0xb26..0xb9c   cb_row    (`row-activated` handler)
+0xb9d..0xc34   rewrite_db
+0xc35..0xcd7   cb_delete (`delbtn` `clicked` handler)
+0xcd8..0xdb8   resolve_paths (exe-dir UI/DB path resolution)
+0xdb9..0xdf7   first_word_cmp (ASCII first-word compare, space-terminated)
+0xdf8..0xeea   note_sorted_insert (shift tables + gtk_list_box_insert at pos)
 ```
 
-### rodata strings (`0x6d0`)
+### rodata strings
 
-| vaddr | bytes | string |
-| :--- | :--- | :--- |
-| `0x4006d0` | `6e6f7465732d67746b2e756900` | `notes-gtk.ui` |
-| `0x4006dd` | `77696e00` | `win` |
-| `0x4006e1` | `65646974 6f7200` | `editor` |
-| `0x4006e8` | `6c69737400` | `list` |
-| `0x4006ed` | `73617665 62746e00` | `savebtn` |
-| `0x4006f5` | `64657374 726f7900` | `destroy` |
-| `0x4006fd` | `636c6963 6b656400` | `clicked` |
-| `0x400705` | `726f772d 61637469 7661746564 00` | `row-activated` |
-| `0x400713` | `6e6f7465 732e6462 00` | `notes.db` |
+| vaddr | string |
+| :--- | :--- |
+| `0x4006d0` | `delbtn` (8-byte padding between GOT slots 14 and 15) |
+| `0x4006e0` | `/proc/self/exe` (passed to `readlink`) |
+| `0x40071b` | `notes-gtk.ui` (fallback basename when `readlink` fails) |
+| `0x400728` | `win` |
+| `0x40072c` | `editor` |
+| `0x400733` | `list` |
+| `0x400738` | `savebtn` |
+| `0x400740` | `destroy` |
+| `0x400748` | `clicked` |
+| `0x400750` | `row-activated` |
+| `0x40075e` | `notes.db` (fallback basename when `readlink` fails) |
 
 ### BSS globals / buffers (zero-filled)
 
 | vaddr | use |
 | :--- | :--- |
+| `0x410050` | `g_ui_path` → resolved `notes-gtk.ui` path (or `0x40071b` on failure) |
+| `0x410058` | `g_db_path` → resolved `notes.db` path (or `0x40075e` on failure) |
+| `0x414000` | scratch: exe path truncated to directory, then `…/notes-gtk.ui` |
+| `0x414200` | scratch: copy of directory, then `…/notes.db` |
 | `0x410000` | `g_builder` |
 | `0x410008` | `g_win` |
 | `0x410010` | `g_editor` |
 | `0x410018` | `g_list` |
 | `0x410020` | `g_savebtn` |
 | `0x410028` | `g_buf` (editor `GtkTextBuffer*`) |
+| `0x410040` | `g_sel_row` (last `row-activated` `GtkListBoxRow*`, or NULL) |
+| `0x410048` | `g_delbtn` |
+| `0x410060` | `g_ins_len` scratch (`u32` length during `note_sorted_insert`) |
 | `0x410030` | `g_count` (u64 note count) |
 | `0x410038` | `g_store_next` (bump pointer for saved-note text, inits to `0x433000`) |
 | `0x411000` | `note_tab_ptr[]` (per-row full-text pointer) |
@@ -123,30 +146,32 @@ zero-filled BSS used for globals and buffers.
 
 ## Code walk-through
 
-### `entry` / `main` (`0x400720`)
+### `entry` / `main` (`0x40076b`)
 
 ```text
 53                     push rbx                 ; rbx = builder (also stack align)
 41 54                  push r12                 ; r12 = window  (2 pushes → 16-aligned)
 31 ff / 31 f6          xor edi,edi / xor esi,esi ; gtk_init(NULL,NULL)
 ff 14 25 58 06 40 00   call [gtk_init]
-bf d0 06 40 00         mov edi, 0x4006d0        ; "notes-gtk.ui"
+e8 <rel32>             call resolve_paths       ; fills g_ui_path / g_db_path
+48 8b 3c 25 50 00 41 00 mov rdi, [g_ui_path]
 ff 14 25 60 06 40 00   call [gtk_builder_new_from_file]
 48 89 c3               mov rbx, rax             ; builder
 48 89 04 25 00 00 41 00 mov [g_builder], rax
 ```
 
-Then four `gtk_builder_get_object` calls fetch `win`, `editor`, `list`,
-`savebtn` (each: `mov rdi,rbx; mov esi,<id string>; call [get_object]; store`),
+Then five `gtk_builder_get_object` calls fetch `win`, `editor`, `list`,
+`savebtn`, `delbtn` (each: `mov rdi,rbx; mov esi,<id string>; call [get_object]; store`),
 and `gtk_text_view_get_buffer(editor)` is cached into `g_buf`.
 
 Signal wiring (all via `g_signal_connect_data` with the extra three args
 cleared):
 
 ```text
-mov rdi,r12 ; mov esi,0x4006f5("destroy") ; mov rdx,[gtk_main_quit] ; ... ; call [g_signal_connect_data]
-mov rdi,[g_savebtn] ; mov esi,0x4006fd("clicked") ; mov edx,0x40091f(cb_save) ; ... ; call [...]
-mov rdi,[g_list] ; mov esi,0x400705("row-activated") ; mov edx,0x400a90(cb_row) ; ... ; call [...]
+mov rdi,r12 ; mov esi,0x400740("destroy") ; mov rdx,[gtk_main_quit] ; ... ; call [g_signal_connect_data]
+mov rdi,[g_savebtn] ; mov esi,0x400748("clicked") ; mov edx,0x4009b2(cb_save) ; ... ; call [...]
+mov rdi,[g_delbtn] ; mov esi,0x400748("clicked") ; mov edx,0x400c35(cb_delete) ; ... ; call [...]
+mov rdi,[g_list] ; mov esi,0x400750("row-activated") ; mov edx,0x400b26(cb_row) ; ... ; call [...]
 ```
 
 The `destroy` handler is the imported `gtk_main_quit` itself (its resolved
@@ -163,9 +188,18 @@ ff 14 25 c0 06 40 00   call [gtk_main]
 b8 e7 00 00 00 / 31 ff / 0f 05   exit_group(0)   ; reached if gtk_main returns
 ```
 
-### `load_notes` (`0x40083b`)
+### `resolve_paths` (`0x400c90`)
 
-Saves `r13/r14/r15`, then `openat(AT_FDCWD, "notes.db", O_RDONLY)`. A negative
+Calls `readlink("/proc/self/exe", buf=0x414000, len=255)`. On success, scans
+backward for the final `/`, NUL-terminates after it (leaving a trailing slash),
+copies that directory prefix into `0x414200`, appends `notes-gtk.ui` onto
+`0x414000` and `notes.db` onto `0x414200`, then stores `g_ui_path=0x414000` and
+`g_db_path=0x414200`. On `readlink` failure, falls back to the rodata basenames
+`0x40071b` / `0x40075e` (cwd-relative).
+
+### `load_notes` (`0x4008c6`)
+
+Saves `r13/r14/r15`, then `openat(AT_FDCWD, [g_db_path], O_RDONLY)`. A negative
 result jumps to the epilogue (no file → empty list). Otherwise it `read`s up to
 `0x10000` bytes into `db_read` (`0x420000`), `close`s the fd, and sets
 `r13 = cursor = 0x420000`, `r15 = end = 0x420000 + nread`, `g_count = 0`.
@@ -174,22 +208,41 @@ Loop body per record while `cursor < end`:
 
 ```text
 41 8b 45 00            mov eax,[r13]            ; len = u32 at cursor
-mov rcx,[g_count]
-mov [note_tab_len + rcx*8], rax                 ; remember length
+83 f8 40               cmp eax,64               ; reject non-fixed records
+75 ..                  jne epilogue             ; (padding after valid rows is not a record)
 lea rdx,[r13+4]                                 ; textptr = cursor+4
-mov [note_tab_ptr + rcx*8], rdx                 ; remember full-text pointer
-xor ecx,ecx                                     ; scan for first space → wlen
-  cmp ecx,eax ; jae done ; cmpb [rdx+rcx],0x20 ; je done ; inc ecx ; jmp
-rep movsb  (rsi=textptr, rdi=label_tmp, rcx=wlen) ; mov byte[rdi],0
-mov edi, 0x413000 ; call [gtk_label_new]        ; label = first word
-mov rsi,rax ; mov rdi,[g_list] ; mov edx,-1 ; call [gtk_list_box_insert]
-inc qword [g_count]
+mov eax,64                                      ; fixed field length for insert
+call note_sorted_insert                         ; sorted insert (see below)
 mov eax,[r13] ; lea r13,[r13+rax+4]             ; advance cursor past record
 ```
 
+`note_sorted_insert(rdx=text, eax=len)` finds the sorted index `k` by calling
+`first_word_cmp` against each existing row's first word, shifts
+`note_tab_ptr[]`/`note_tab_len[]` right from `k`, stores the new pointer/length,
+builds the first-word label into `label_tmp`, and calls
+`gtk_list_box_insert(list, label, k)` followed by `gtk_widget_show(label)`.
 Rows added here are shown later by `gtk_widget_show_all(win)`.
 
-### `cb_save` (`0x40091f`) — `clicked` handler
+### `first_word_cmp` (`0x400db9`)
+
+Compares two NUL- or space-terminated ASCII strings byte-by-byte (sign-extended
+`char` subtraction). Returns negative/positive/zero like `strcmp` on the first
+word only.
+
+### `note_sorted_insert` (`0x400df8`)
+
+```text
+; rdx = text pointer, eax = length (64 for save, or from record for load)
+; length saved to g_ins_len (0x410060); prologue uses 3 pushes so the stack
+; stays 16-byte aligned before GTK calls (required for SSE movaps in glib)
+; find_k scans k=0..count-1 comparing first words; jg store when
+;     first_word_cmp(existing[k], new) > 0 (insert before larger entry)
+; shift note_tab_ptr/note_tab_len entries [k..count-1] → [k+1..count]
+; note_tab_ptr[k]=rdx, note_tab_len[k]=len, build label, gtk_list_box_insert(...,k)
+inc g_count
+```
+
+### `cb_save` (`0x4009b2`) — `clicked` handler
 
 Saves `rbx/r12/r13`. Lazily initialises `g_store_next` to `0x433000` on first
 use. Then:
@@ -199,40 +252,70 @@ use. Then:
 2. Stage a record in `rec_buf`: `mov dword[0x413100], 0x40` (length), fill 64
    bytes at `0x413104` with `0x20` (spaces) via `rep stosb`, then copy the text
    over (stopping at NUL or 64 bytes) so the field is space-padded.
-3. `openat(AT_FDCWD, "notes.db", O_WRONLY|O_CREAT|O_APPEND, 0644)`
+3. `openat(AT_FDCWD, [g_db_path], O_WRONLY|O_CREAT|O_APPEND, 0644)`
    (`edx=0x441`, `r10d=0x1a4`), then `write(fd, rec_buf, 68)` and `close(fd)`.
    A negative open skips the I/O but still updates the UI.
 4. Copy the 64-byte field into the bump area (`g_store_next`), NUL-terminate,
-   record `note_tab_ptr[count]`/`note_tab_len[count]=64`, so a later click on
-   the new row reloads it.
-5. Build the first-word label (same scan as `load_notes`),
-   `gtk_list_box_insert(list, label, -1)`, `gtk_widget_show(label)` (needed
-   because the main loop is already running), `inc g_count`.
+   set `rdx` to that copy, `mov eax,64`, `call note_sorted_insert` (sorted list
+   row + table slot).
 
-### `cb_row` (`0x400a90`) — `row-activated` handler
+### `cb_row` (`0x400b26`) — `row-activated` handler
 
 ```text
-53                     push rbx                 ; align
-48 89 f7               mov rdi,rsi              ; rsi = the activated GtkListBoxRow
-ff 14 25 b0 06 40 00   call [gtk_list_box_row_get_index]  ; eax = row index
-48 63 c8               movslq rcx,eax
-mov rdi,[g_buf]
-mov rsi,[note_tab_ptr + rcx*8]                  ; full text pointer
-mov rdx,[note_tab_len + rcx*8]                  ; length
-ff 14 25 78 06 40 00   call [gtk_text_buffer_set_text]    ; load into editor
+53                     push rbx
+48 89 f0               mov rax,rsi              ; GtkListBoxRow* (NULL on deselect)
+48 85 c0               test rax,rax
+je epilogue
+48 89 04 25 40 00 41 00 mov [g_sel_row],rax
+48 89 c7               mov rdi,rax
+ff 14 25 b0 06 40 00   call [gtk_list_box_row_get_index]  ; rcx = row index
+; bounds-check index against g_count
+48 8b 3c 25 28 00 41 00 mov rdi,[g_buf]
+48 8b 34 cd 00 10 41 00 mov rsi,[note_tab_ptr + rcx*8]
+48 8b 14 cd 00 20 41 00 mov rdx,[note_tab_len + rcx*8]
+; trim trailing spaces from length, then:
+ff 14 25 78 06 40 00   call [gtk_text_buffer_set_text](buf, text, len)
 5b / c3                pop rbx / ret
 ```
+
+### `cb_delete` (`0x400c35`) — `delbtn` `clicked` handler
+
+Uses `g_sel_row` (set by `cb_row`). If NULL, `jne +6` skips a six-byte stub that
+`pop`s `r13`/`r12`/`rbx` and `ret`s. Otherwise:
+
+1. `mov rbx, rdi` — save the selected `GtkListBoxRow*`.
+2. `gtk_list_box_row_get_index(row)` → index for table compaction.
+3. Shift `note_tab_ptr[]` / `note_tab_len[]` entries down over the deleted index;
+   `dec g_count`.
+4. `gtk_widget_destroy(row)` via GOT slot `0x4006d8` (not `0x4006d0`, which
+   holds the `delbtn` id string).
+5. `call rewrite_db` at `0x400b9d` (full prologue: open truncate + rewrite loop) —
+   truncate and rewrite `notes.db` from the in-memory tables.
+6. Clear `g_sel_row`, then `gtk_text_buffer_set_text(g_buf, "", -1)` using the
+   empty string at `0x40075d`.
+
+### `rewrite_db` (`0x400b9d`)
+
+Rewrites `notes.db` from scratch after a delete. Opens `notes.db` with
+`O_RDWR|O_CREAT|O_TRUNC`, loops `rbx = 0 .. g_count-1` staging each
+`note_tab_ptr[i]` into `rec_buf` and `write`s 68 bytes, then `close`s the fd.
+
+Loop termination uses `cmp g_count, rbx` / `jae +0x54` to the `close` block at
+`0x400bd4` (displacement byte at file offset `0xb7f`; the `jae` opcode is at
+`0xb7e`). A corrupted byte pair (`55 54` = `push rbp` / `push rsp`) in place of
+`73 54` was one prior crash source.
+
+Epilogue: `pop r13`, `pop r12`, `pop rbx`, `ret` (matching the prologue).
 
 ## Running
 
 ```bash
-cd products/notes/targets/linux/x86_64/gtk
-DISPLAY=:0 ./notes-gtk-x86_64      # requires notes-gtk.ui and (optionally) notes.db in cwd
+DISPLAY=:0 ./products/notes/targets/linux/x86_64/gtk/notes-gtk-x86_64
 ```
 
-The window title is `Notes (GTK)`. `notes-gtk.ui` must be in the working
-directory (it is loaded by relative path); `notes.db` is optional (absent → an
-empty list that the Save button will create).
+`notes-gtk.ui` must sit beside the executable (resolved via `/proc/self/exe`).
+`notes.db` is read/written beside the executable as well and is optional on first
+launch. If `readlink` fails, both paths fall back to cwd-relative basenames.
 
 ## Verification
 

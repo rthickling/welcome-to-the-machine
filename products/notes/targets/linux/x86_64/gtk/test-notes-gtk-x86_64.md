@@ -20,17 +20,17 @@ Each row is `(file offset in the product, length, meaning)`:
 | # | offset | len | what it anchors |
 | ---: | :--- | ---: | :--- |
 | 1 | `0x000` | 8 | ELF ident `7f 45 4c 46 02 01 01 00` (ELF64, LE, SysV) |
-| 2 | `0x010` | 12 | `e_type=EXEC`, `e_machine=x86-64`, `e_entry=0x400720` |
+| 2 | `0x010` | 12 | `e_type=EXEC`, `e_machine=x86-64`, `e_entry=0x40076b` |
 | 3 | `0x0e8` | 28 | `.interp` = `/lib64/ld-linux-x86-64.so.2\0` (proves it is dynamically linked) |
-| 4 | `0x2e2` | 26 | `.dynstr` symbol name `gtk_builder_new_from_file\0` |
-| 5 | `0x407` | 14 | `DT_NEEDED` string `libgtk-3.so.0\0` |
-| 6 | `0x415` | 20 | `DT_NEEDED` string `libgobject-2.0.so.0\0` |
-| 7 | `0x720` | 14 | entry prologue `53 41 54 31 ff 31 f6 ff 14 25 58 06 40 00` (`push rbx/r12` + `call [gtk_init]`) |
-| 8 | `0x6d0` | 13 | UI path literal `notes-gtk.ui\0` |
-| 9 | `0x713` | 9 | database path literal `notes.db\0` |
-| 10 | `0x841` | 15 | `load_notes` open: `openat(AT_FDCWD,"notes.db",…)` bytes `b8 01 01 00 00 bf 9c ff ff ff be 13 07 40 00` |
-| 11 | `0x974` | 11 | `cb_save` record-length store `c7 04 25 00 31 41 00 40 00 00 00` (`mov dword[rec_buf],0x40`) |
-| 12 | `0x7e7` | 5 | `clicked` wiring `ba 1f 09 40 00` (`mov edx, cb_save`) |
+| 4 | `0x2fa` | 26 | `.dynstr` symbol name `gtk_builder_new_from_file\0` |
+| 5 | `0x41f` | 14 | `DT_NEEDED` string `libgtk-3.so.0\0` |
+| 6 | `0x42d` | 20 | `DT_NEEDED` string `libgobject-2.0.so.0\0` |
+| 7 | `0x76b` | 14 | entry prologue `53 41 54 31 ff 31 f6 ff 14 25 58 06 40 00` (`push rbx/r12` + `call [gtk_init]`) |
+| 8 | `0x71b` | 13 | UI path literal `notes-gtk.ui\0` |
+| 9 | `0x75e` | 9 | database path literal `notes.db\0` |
+| 10 | `0x8c6` | 15 | `load_notes` prologue `41 55 41 56 41 57 b8 01 01 00 00 bf 9c ff ff ff` (pushes + `openat` setup; path is `[g_db_path]`) |
+| 11 | `0xa07` | 11 | `cb_save` record-length store `c7 04 25 00 31 41 00 40 00 00 00` (`mov dword[rec_buf],0x40`) |
+| 12 | `0x851` | 5 | `clicked` wiring `ba b2 09 40 00` (`mov edx, cb_save`) |
 
 Checks 3, 5, and 6 are the crux of the "is this really a dynamically-linked GTK
 program" question: they pin the interpreter request and both shared-library

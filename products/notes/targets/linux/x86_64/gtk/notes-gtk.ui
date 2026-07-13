@@ -12,6 +12,7 @@
     editor   : GtkTextView    left editor pane
     list     : GtkListBox     right note list, "row-activated" -> load
     savebtn  : GtkButton      "clicked" -> append editor text to notes.db
+    delbtn   : GtkButton      "clicked" -> delete selected list row + rewrite notes.db
 -->
 <interface>
   <requires lib="gtk+" version="3.20"/>
@@ -58,6 +59,7 @@
                   <object class="GtkListBox" id="list">
                     <property name="visible">True</property>
                     <property name="selection-mode">single</property>
+                    <property name="activate-on-single-click">True</property>
                   </object>
                 </child>
               </object>
@@ -70,6 +72,12 @@
             <property name="orientation">horizontal</property>
             <property name="spacing">8</property>
             <property name="halign">end</property>
+            <child>
+              <object class="GtkButton" id="delbtn">
+                <property name="visible">True</property>
+                <property name="label">Delete note</property>
+              </object>
+            </child>
             <child>
               <object class="GtkButton" id="savebtn">
                 <property name="visible">True</property>
