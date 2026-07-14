@@ -1,22 +1,22 @@
 # `products/notes/notes-win64.exe`
 
-`notes-win64.exe` is a **4608-byte** `PE32+` Windows x86_64 GUI executable.
+`notes-win64.exe` is a **13312-byte** `PE32+` Windows x86_64 GUI executable.
 It uses only Win32 imports and opens a native Notes window under Windows or
 Wine.
 
-The current Win64 GUI is a genuinely persistent notes app:
+The Win64 GUI matches the shared product contract:
 
 - a left multiline editor pane
-- a right list pane populated from `notes.db` at startup (no more seeded
-  placeholder notes)
-- an `Add` button that copies the editor text into the list **and rewrites
-  `notes.db`**
+- a right list pane showing **first-word labels only**, sorted alphabetically
+- an `Add` button that copies the editor text into the sorted list **and
+  rewrites `notes.db`**
 - a `Delete` button that removes the selected list item **and rewrites
   `notes.db`**
-- clicking a list row loads that note's text back into the editor
+- clicking a list row loads that note's **full text** back into the editor
 
-Persistence uses the same shared `[u32 length][length bytes of text]` record
-format as the other Notes targets (see the [product contract](../../../contract.md)).
+Persistence uses GTK-aligned **68-byte records** (`u32` length `0x40` plus a
+64-byte space-padded text field). Legacy variable-length records in an existing
+`notes.db` are still readable on load.
 Typing, cursor movement, selection, copy/paste, and editor scrolling are handled
 by the built-in Windows `EDIT` control. Because that editor is multiline
 (`ES_WANTRETURN`), `Enter` inserts a newline; the `Add` button is the explicit
@@ -37,14 +37,20 @@ save action, matching the "Enter/save" role on the other targets.
 0x950..0x96d    30    DLL names
 0x980..0xa1f   160    USER32 ILT/IAT arrays
 0xa30..0xab4   133    imported function hint/name strings
-0xb00..0xd6d   622    new persistence + click-to-load code
-0xd6e..0x11ff        zero padding to the grown raw size
+0xb00..0x106c   persistence helpers (load/save/disp/trampoline + sorted-insert tables)
+0xe00..0xf48   first_word_cmp, arena copy, note_sorted_insert, note_table_remove
+0xf50..0x106c  rewrite_db (68-byte records from in-memory tables)
+0x1a00..0x2fff  writable note tables / arena (`.text` grown writable)
+0x1200..0x33ff  zero tail from section growth
 ```
 
-The single `.text` section maps file offset `0x200` to RVA `0x1000`. To hold
-the new code and import arrays, its `VirtualSize` and `SizeOfRawData` were both
-grown from `0x900`/`0xa00` to `0x1000` (the section still ends at RVA `0x2000`,
-matching `SizeOfImage`), and the file was extended to `0x1200`.
+The PE bytes in [`notes-win64.exe`](notes-win64.exe) are the source of truth
+(literal opcode patches only — no compiler or shell emitter).
+
+The single `.text` section maps file offset `0x200` to RVA `0x1000`. The
+section was grown to `VirtualSize`/`SizeOfRawData` `0x3200`, `SizeOfImage`
+`0x4000`, and marked writable (`0xE0000020`) so in-memory `note_tab_ptr[]` /
+`note_tab_len[]` can live at RVA `0x2800`.
 
 ## Header anchors
 

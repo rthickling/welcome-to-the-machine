@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  notes-gtk.ui — GtkBuilder widget tree for the dynamically-linked
+  hand-authored machine-code Notes app (notes-gtk-x86_64).
+
+  The executable is pure hand-written machine code; per repo rule 7 it
+  links libgtk-3 / libgobject-2.0 dynamically and, per the user's
+  allowance, may consume this human-readable XML that GTK itself parses.
+
+  Object ids consumed by the binary (via gtk_builder_get_object):
+    win      : GtkWindow      top-level, "destroy" -> gtk_main_quit
+    editor   : GtkTextView    left editor pane
+    list     : GtkListBox     right note list, "row-activated" -> load
+    savebtn  : GtkButton      "clicked" -> append editor text to notes.db
+    delbtn   : GtkButton      "clicked" -> delete selected list row + rewrite notes.db
+-->
+<interface>
+  <requires lib="gtk+" version="3.20"/>
+  <object class="GtkWindow" id="win">
+    <property name="title">Notes (GTK)</property>
+    <property name="default-width">760</property>
+    <property name="default-height">480</property>
+    <property name="border-width">8</property>
+    <child>
+      <object class="GtkBox" id="root">
+        <property name="visible">True</property>
+        <property name="orientation">vertical</property>
+        <property name="spacing">8</property>
+        <child>
+          <object class="GtkBox" id="panes">
+            <property name="visible">True</property>
+            <property name="orientation">horizontal</property>
+            <property name="spacing">8</property>
+            <child>
+              <object class="GtkScrolledWindow" id="editscroll">
+                <property name="visible">True</property>
+                <property name="hexpand">True</property>
+                <property name="vexpand">True</property>
+                <property name="shadow-type">in</property>
+                <child>
+                  <object class="GtkTextView" id="editor">
+                    <property name="visible">True</property>
+                    <property name="left-margin">6</property>
+                    <property name="right-margin">6</property>
+                    <property name="top-margin">6</property>
+                    <property name="bottom-margin">6</property>
+                    <property name="monospace">True</property>
+                  </object>
+                </child>
+              </object>
+            </child>
+            <child>
+              <object class="GtkScrolledWindow" id="listscroll">
+                <property name="visible">True</property>
+                <property name="vexpand">True</property>
+                <property name="shadow-type">in</property>
+                <property name="width-request">240</property>
+                <child>
+                  <object class="GtkListBox" id="list">
+                    <property name="visible">True</property>
+                    <property name="selection-mode">single</property>
+                    <property name="activate-on-single-click">True</property>
+                  </object>
+                </child>
+              </object>
+            </child>
+          </object>
+        </child>
+        <child>
+          <object class="GtkBox" id="buttons">
+            <property name="visible">True</property>
+            <property name="orientation">horizontal</property>
+            <property name="spacing">8</property>
+            <property name="halign">end</property>
+            <child>
+              <object class="GtkButton" id="delbtn">
+                <property name="visible">True</property>
+                <property name="label">Delete note</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkButton" id="savebtn">
+                <property name="visible">True</property>
+                <property name="label">Save note</property>
+              </object>
+            </child>
+          </object>
+        </child>
+      </object>
+    </child>
+  </object>
+</interface>

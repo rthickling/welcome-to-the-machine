@@ -69,4 +69,13 @@ test.
 
 - `./test-notes-win64` exits `0` on the committed `notes-win64.exe`
 - corrupting any anchored range makes it exit `1`
+
+Contract uplift bytes to spot-check manually in the rebuilt binary:
+
+| File offset | Bytes | Meaning |
+| ----------- | ----- | ------- |
+| `0xe00` | `0f b6 01 3c 20 74 0f 3c 00` | `first_word_cmp` prologue |
+| `0xef9` | `ba 81 01 00 00` | `LB_INSERTSTRING` in `note_sorted_insert` |
+| `0xfca` | `b8 40 00 00 00` | 68-byte record length constant in `save_notes` |
+
 - with Wine installed, `wine notes-win64.exe` runs the GUI itself

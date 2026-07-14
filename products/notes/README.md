@@ -21,7 +21,8 @@ the verifier binary, and the verifier Markdown together.
 | Linux x86_64 | Session-independent raw-X11 reference build: runtime `DISPLAY`/cookie/root-window discovery, printable input, uppercase/symbols, borders, colors, load, save, delete, and `WM_DELETE_WINDOW` close. | [`targets/linux/x86_64/`](targets/linux/x86_64/) |
 | Linux x86_64 (GTK) | Hand-authored **dynamically-linked** GTK 3 build for a richer native UI: real title bar, scrollable text editor, scrollable selectable list, and a Save button. Loads its widget tree from `notes-gtk.ui`, populates the list from `notes.db`, click-to-load, Save-appends. Links `libgtk-3`/`libgobject-2.0` via the dynamic loader. | [`targets/linux/x86_64/gtk/`](targets/linux/x86_64/gtk/) |
 | Linux ARM64 | Full hand-authored AArch64 raw-X11 port of the flagship: session discovery, two-pane GUI, `notes.db` load, keyboard entry, `Enter`-save, click-to-load, `WM_DELETE` close. Verified under `qemu-aarch64-static`. | [`targets/linux/arm64/`](targets/linux/arm64/) |
-| Windows x86_64 | Runnable two-pane Win32 GUI with `notes.db` persistence, click-to-load, `Enter`/`Add` save, sorted list, and `Delete`. | [`targets/windows/x86_64/`](targets/windows/x86_64/) |
+| Linux ARM64 (GTK) | Hand-authored **dynamically-linked** AArch64 GTK 3 build mirroring the x86_64 GTK target: same `notes-gtk.ui`, sorted first-word list, 68-byte `notes.db` records, structural verifier on the build host. | [`targets/linux/arm64/gtk/`](targets/linux/arm64/gtk/) |
+| Windows x86_64 | Runnable two-pane Win32 GUI with `notes.db` persistence, sorted first-word list, 68-byte records, click-to-load, `Add` save, and `Delete`. | [`targets/windows/x86_64/`](targets/windows/x86_64/) |
 | Windows ARM64 | GUI-subsystem scaffold/container and structural verifier. | [`targets/windows/arm64/`](targets/windows/arm64/) |
 | macOS arm64 | Mach-O GUI scaffold/container and structural verifier. | [`targets/apple/macos-arm64/`](targets/apple/macos-arm64/) |
 | iOS arm64 | Mach-O GUI scaffold/container and structural verifier. | [`targets/apple/ios-arm64/`](targets/apple/ios-arm64/) |
@@ -62,6 +63,8 @@ cd gtk
 
 cd ../../arm64
 ./test-notes-linux-arm64
+cd gtk
+./test-notes-gtk-arm64
 
 cd ../../windows/x86_64
 ./test-notes-win64
