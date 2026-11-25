@@ -4,8 +4,8 @@ This file covers:
 
 - `notes-web.wasm`
 
-under the approved policy that browser host glue may remain external to the
-committed repo artifacts.
+under the approved policy that a thin browser **test harness** (not a
+development tool) may adapt the Wasm product to a real browser.
 
 ## Goal
 
@@ -21,10 +21,10 @@ Provide the same core notes behavior in a browser-hosted environment:
 
 ## Current artifact
 
-`notes-web.wasm` now implements the browser-hosted GUI contract boundary: it
-imports drawing/storage functions from module `notes`, exports `init`, `key`,
-and `click`, owns the editor buffer in linear memory, and renders the note/list
-pane chrome through host callbacks.
+`notes-web.wasm` is the full Notes **product** for the browser target: UI,
+records, sort, delete, and hit-testing all run inside Wasm. It imports only
+`present` (framebuffer blit) and `rewrite` (opaque persist); `save` may be a
+host no-op.
 
 ## Product policy for web
 
@@ -34,27 +34,36 @@ The committed in-repo deliverable stays:
 - a machine-code test
 - matching Markdown documentation
 
-The browser bootstrap layer can remain external host glue, because the user
-explicitly approved that policy while planning.
+Browser harness code (HTML/JS) may exist **only** as a **test mechanism** to
+run the Wasm product in a browser: load the module, blit pixels, forward
+keys/clicks, and read/write an opaque byte store. It is not a development,
+build, or authoring tool. It must not implement Notes product semantics
+(sort, parse/build records, list logic, etc.).
+
+See [`notes-web-runner.html.md`](../runners/web/notes-web-runner.html.md).
 
 ## Required behavior contract
 
-The web implementation should expose host-call or import boundaries for:
+Host glue may only provide:
 
-- rendering the two-pane note UI
-- list hit-testing
-- keyboard text entry
-- browser-side persistence
-- border drawing / styling for the editor and list panes
-- foreground/background colour selection matching the product contrast policy
+- canvas blit of the Wasm framebuffer (`present`)
+- opaque persistence of a byte range (`rewrite`)
+- keyboard / pointer forwarding into `key` / `click`
+
+All two-pane UI, hit-testing, editing, sorting, and record layout live in Wasm.
 
 ## Storage
 
-The logical note format should still match the shared product contract, even if
-the browser host persists the bytes via IndexedDB, local storage, or a custom
-host bridge.
+The host stores an opaque blob of packed **68-byte** records. Interpretation of
+that blob is solely the Wasm module’s job.
 
 ## Testing
+
+1. **Structural (no browser):** `test-notes-web` anchors magic, imports/exports,
+   and label bytes. Prefer this for routine regression.
+2. **Interactive (browser test harness):** serve with `run_notes` and open
+   `notes-web-runner.html` to manually exercise UI, input, save, and delete.
+   That HTML/JS page is a test adapter only — not how the product is developed.
 
 The Wasm verifier should structurally anchor:
 

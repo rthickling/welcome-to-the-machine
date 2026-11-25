@@ -45,112 +45,68 @@
   <main>
     <canvas id="notes" width="600" height="400" tabindex="0" aria-label="Notes WebAssembly UI"></canvas>
     <div class="hint">
-      Type printable text. Backspace edits. Enter saves. Click a saved first-word
-      row to reload it into the editor. The list, first-word derivation, and
-      click hit-testing now live inside the Wasm module; the host only supplies
-      stored records and persists saves.
+      Browser <strong>test harness</strong> only (not a development tool): blit
+      the Wasm framebuffer and persist an opaque byte blob. All Notes product
+      logic lives in notes-web.wasm.
     </div>
   </main>
 
   <script>
+    // Browser test harness only — not a development tool; not product logic.
     const canvas = document.getElementById("notes");
     const ctx = canvas.getContext("2d");
-    const decoder = new TextDecoder("utf-8");
-    const encoder = new TextEncoder();
     const storageKey = "machine-welcome.notes-web.records";
+    const FB_W = 600;
+    const FB_H = 400;
+    const FB_ADDR = 0;
+    const FB_BYTES = FB_W * FB_H * 4;
+    const RECORDS_ADDR = 0xed000;
+    const RECORDS_LIMIT = 0x1000;
     let instance;
     let memory;
-    let background = "#202020";
-    let foreground = "#e0e0e0";
+    let imageData;
 
-    function cssColor(pixel) {
-      return `#${(pixel >>> 0).toString(16).padStart(6, "0").slice(-6)}`;
+    function present() {
+      const fb = new Uint8ClampedArray(memory.buffer, FB_ADDR, FB_BYTES);
+      if (!imageData) imageData = new ImageData(FB_W, FB_H);
+      imageData.data.set(fb);
+      ctx.putImageData(imageData, 0, 0);
     }
 
-    // Shared record format matching the other Notes targets and the Wasm
-    // module's `load` parser: a run of [u32 little-endian length][length bytes].
-    const RECORDS_ADDR = 0x200; // staging region the module parses on load()
-    const RECORDS_LIMIT = 0x800 - RECORDS_ADDR; // stay below the module's index table
-
-    function savedNotes() {
+    function loadStore() {
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) return new Uint8Array();
       try {
-        const parsed = JSON.parse(localStorage.getItem(storageKey) || "[]");
-        return Array.isArray(parsed) ? parsed.filter((item) => typeof item === "string") : [];
+        return Uint8Array.from(atob(raw), (ch) => ch.charCodeAt(0));
       } catch {
-        return [];
+        return new Uint8Array();
       }
     }
 
-    function setSavedNotes(notes) {
-      localStorage.setItem(storageKey, JSON.stringify(notes));
+    function persistStore(ptr, len) {
+      const bytes = new Uint8Array(memory.buffer, ptr, len);
+      localStorage.setItem(
+        storageKey,
+        btoa(String.fromCharCode(...bytes)),
+      );
     }
 
-    function readMemory(ptr, len) {
-      return decoder.decode(new Uint8Array(memory.buffer, ptr, len));
-    }
-
-    // Serialise the stored notes into module memory and hand ownership of the
-    // list to the module: it derives first words, renders the rows, and
-    // hit-tests clicks itself.
     function pushRecordsAndLoad() {
-      const notes = savedNotes();
+      const blob = loadStore();
       const u8 = new Uint8Array(memory.buffer);
-      const dv = new DataView(memory.buffer);
-      let pos = 0;
-      for (const note of notes) {
-        const b = encoder.encode(note);
-        if (pos + 4 + b.length > RECORDS_LIMIT) break;
-        dv.setUint32(RECORDS_ADDR + pos, b.length, true);
-        pos += 4;
-        u8.set(b, RECORDS_ADDR + pos);
-        pos += b.length;
-      }
-      instance.exports.load(pos);
-    }
-
-    let reloadQueued = false;
-    function queueReload() {
-      // save() runs inside a module call; defer load() until it unwinds so we
-      // do not re-enter the instance.
-      if (reloadQueued) return;
-      reloadQueued = true;
-      queueMicrotask(() => {
-        reloadQueued = false;
-        pushRecordsAndLoad();
-      });
+      const len = Math.min(blob.length, RECORDS_LIMIT);
+      u8.fill(0, RECORDS_ADDR, RECORDS_ADDR + RECORDS_LIMIT);
+      u8.set(blob.subarray(0, len), RECORDS_ADDR);
+      instance.exports.load(len);
     }
 
     const imports = {
       notes: {
-        clear() {
-          ctx.fillStyle = background;
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-        },
-        style(bg, fg) {
-          background = cssColor(bg);
-          foreground = cssColor(fg);
-          ctx.strokeStyle = foreground;
-          ctx.fillStyle = foreground;
-          ctx.font = "16px monospace";
-        },
-        rect(x, y, w, h) {
-          ctx.strokeStyle = foreground;
-          ctx.strokeRect(x, y, w, h);
-        },
-        text(x, y, ptr, len) {
-          const value = readMemory(ptr, len);
-          ctx.fillStyle = foreground;
-          ctx.font = "16px monospace";
-          ctx.fillText(value, x, y);
-        },
-        save(ptr, len) {
-          const value = readMemory(ptr, len).trimEnd();
-          if (!value) return;
-          const notes = savedNotes();
-          notes.push(value);
-          notes.sort((a, b) => a.localeCompare(b));
-          setSavedNotes(notes);
-          queueReload();
+        present,
+        // Unused by the product path; kept so the module instantiates.
+        save(_ptr, _len) {},
+        rewrite(ptr, len) {
+          persistStore(ptr, len);
         },
       },
     };
@@ -169,9 +125,7 @@
       }
       if (event.key.length === 1) {
         event.preventDefault();
-        for (const byte of encoder.encode(event.key)) {
-          instance.exports.key(byte);
-        }
+        instance.exports.key(event.key.charCodeAt(0) & 0xff);
       }
     });
 
@@ -180,8 +134,6 @@
       const rect = canvas.getBoundingClientRect();
       const x = Math.floor((event.clientX - rect.left) * (canvas.width / rect.width));
       const y = Math.floor((event.clientY - rect.top) * (canvas.height / rect.height));
-      // The module owns hit-testing: it maps the click to a list row and loads
-      // that note back into the editor, then repaints.
       instance.exports.click(x, y);
       canvas.focus();
     });

@@ -3,3 +3,6 @@ core.*
 var/local/
 .venv/
 __pycache__/
+*.cwasm
+.history/
+.links2/
